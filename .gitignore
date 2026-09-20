@@ -15,6 +15,9 @@ build/
 # Secrets
 .env
 
+# Claude
+CLAUDE.md
+
 # Virtual environments
 .venv/
 venv/
