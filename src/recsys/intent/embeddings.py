@@ -3,7 +3,7 @@
 Provides a ``QueryEmbedder`` protocol and implementations:
 
 - ``NullEmbedder`` — returns empty vectors (default when no provider is available).
-- ``SoclaasEmbedder`` — uses the SOCLaaS ``bge-m3`` model (1024-dim, multilingual).
+- ``BgeM3Embedder`` — uses the SOCLaaS ``bge-m3`` model (1024-dim, multilingual).
 
 The ``bge-m3`` model is especially well-suited for QCSAR because it handles
 cross-lingual similarity — English queries produce embeddings that are close
@@ -49,7 +49,7 @@ class NullEmbedder:
         return [[] for _ in texts]
 
 
-class SoclaasEmbedder:
+class BgeM3Embedder:
     """Embed text via SOCLaaS ``bge-m3`` (1024-dim multilingual embeddings).
 
     Uses the same SOCLaaS API credentials as the query parser, but targets
@@ -66,7 +66,7 @@ class SoclaasEmbedder:
 
     Examples
     --------
-    >>> embedder = SoclaasEmbedder()
+    >>> embedder = BgeM3Embedder()
     >>> vec = embedder.embed("cute cat videos")
     >>> len(vec)
     1024

@@ -13,7 +13,7 @@ import pytest
 
 from recsys.contracts.enums import ContentStyle, DurationPreference, QueryIntentType
 from recsys.contracts.models import QueryIntent
-from recsys.intent.embeddings import NullEmbedder, SoclaasEmbedder
+from recsys.intent.embeddings import BgeM3Embedder, NullEmbedder
 from recsys.intent.query_parser import QueryParser, _default_query_intent
 
 
@@ -229,7 +229,7 @@ class TestQueryParser:
         assert result.query_embedding is None
 
 
-class TestSoclaasEmbedder:
+class TestBgeM3Embedder:
     def test_embed_single(self) -> None:
         with patch("recsys.intent.embeddings.OpenAI") as mock_cls:
             mock_client = MagicMock()
@@ -242,7 +242,7 @@ class TestSoclaasEmbedder:
             mock_response.data = [mock_data]
             mock_client.embeddings.create.return_value = mock_response
 
-            embedder = SoclaasEmbedder(api_key="test-key")
+            embedder = BgeM3Embedder(api_key="test-key")
             result = embedder.embed("hello")
 
             assert len(result) == 1024
@@ -263,7 +263,7 @@ class TestSoclaasEmbedder:
             mock_response.data = [mock_data_1, mock_data_2]
             mock_client.embeddings.create.return_value = mock_response
 
-            embedder = SoclaasEmbedder(api_key="test-key")
+            embedder = BgeM3Embedder(api_key="test-key")
             result = embedder.embed_batch(["a", "b"])
 
             assert len(result) == 2
@@ -276,7 +276,7 @@ class TestSoclaasEmbedder:
             mock_cls.return_value = mock_client
             mock_client.embeddings.create.side_effect = RuntimeError("API down")
 
-            embedder = SoclaasEmbedder(api_key="test-key")
+            embedder = BgeM3Embedder(api_key="test-key")
             result = embedder.embed("hello")
             assert result == []
 
@@ -284,4 +284,4 @@ class TestSoclaasEmbedder:
         with patch("recsys.intent.embeddings.OpenAI"):
             with patch.dict("os.environ", {}, clear=True):
                 with pytest.raises(ValueError, match="No API key"):
-                    SoclaasEmbedder(api_key="")
+                    BgeM3Embedder(api_key="")

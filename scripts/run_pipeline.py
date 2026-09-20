@@ -23,7 +23,7 @@ def main() -> None:
     parser.add_argument("--num_candidates", type=int, default=100)
     args = parser.parse_args()
 
-    from recsys.intent import QueryParser, SoclaasEmbedder, NullEmbedder
+    from recsys.intent import QueryParser, BgeM3Embedder, NullEmbedder
     from recsys.routing import QueryRouter
 
     # --- Stage 1: Parse query ---
@@ -31,7 +31,7 @@ def main() -> None:
 
     # Try bge-m3 embeddings; fall back to NullEmbedder if unavailable
     try:
-        embedder = SoclaasEmbedder()
+        embedder = BgeM3Embedder()
     except (ValueError, Exception):
         embedder = NullEmbedder()
 
