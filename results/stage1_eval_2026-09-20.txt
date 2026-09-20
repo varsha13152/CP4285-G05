@@ -1,0 +1,222 @@
+Evaluating 30 synthetic queries...
+
+[ 1] ✗ 'fun cooking videos for a student dinner'
+     Topics:   Food(12), Daily Life(11)  (expected: {12})
+     Style:    FUNNY        ✓
+     Duration: SHORT        ✓
+     Intent:   LEARNING           ✗ expected ENTERTAINMENT
+     Latency:  1.40s
+
+[ 2] ✓ 'how to do makeup for beginners'
+     Topics:   Beauty/Makeup(4)  (expected: {4})
+     Style:    INFORMATIVE  ✓
+     Duration: MEDIUM       ✓
+     Intent:   LEARNING           ✓
+     Latency:  0.93s
+
+[ 3] ✓ 'cute cat videos'
+     Topics:   Pets(17)  (expected: {17})
+     Style:    CUTE         ✓
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.59s
+
+[ 4] ✗ 'trending dance challenges'
+     Topics:   Dance(1)  (expected: {1})
+     Style:    ENERGETIC    ✓
+     Duration: SHORT        ✓
+     Intent:   EXPLORATION        ✗ expected SOCIAL
+     Latency:  1.13s
+
+[ 5] ✗ 'relaxing travel scenery, not too long'
+     Topics:   Travel(10)  (expected: {10})
+     Style:    RELAXING     ✓
+     Duration: SHORT        ✓
+     Intent:   EXPLORATION        ✗ expected ENTERTAINMENT
+     Latency:  1.08s
+
+[ 6] ✓ 'learn guitar basics'
+     Topics:   Education(14), Music(2)  (expected: {2})
+     Style:    INFORMATIVE  ✓
+     Duration: MEDIUM       ✓
+     Intent:   LEARNING           ✓
+     Latency:  1.37s
+
+[ 7] ✓ 'funny comedy sketches'
+     Topics:   Comedy(9)  (expected: {9})
+     Style:    FUNNY        ✓
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.72s
+
+[ 8] ✗ 'home workout routines'
+     Topics:   Fitness(31)  (expected: {31})
+     Style:    ENERGETIC    ✓
+     Duration: SHORT        ✗ expected MEDIUM
+     Intent:   LEARNING           ✓
+     Latency:  1.02s
+
+[ 9] ✓ 'anime cosplay highlights'
+     Topics:   Anime/ACG(20), Beauty/Makeup(4), Fashion(5)  (expected: {20})
+     Style:    AESTHETIC    ✓
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  1.44s
+
+[10] ✓ 'investment tips for beginners'
+     Topics:   Finance(22), Education(14)  (expected: {22})
+     Style:    INFORMATIVE  ✓
+     Duration: MEDIUM       ✓
+     Intent:   LEARNING           ✓
+     Latency:  1.16s
+
+[11] ✗ 'cooking and fashion hauls'
+     Topics:   Food(12), Fashion(5)  (expected: {12, 5})
+     Style:    NEUTRAL      ✓
+     Duration: MEDIUM       ✗ expected ANY
+     Intent:   EXPLORATION        ✓
+     Latency:  0.99s
+
+[12] ✓ 'sports highlights and fitness motivation'
+     Topics:   Sports(7), Fitness(31)  (expected: {31, 7})
+     Style:    ENERGETIC    ✓
+     Duration: SHORT        ✓
+     Intent:   INSPIRATION        ✓
+     Latency:  1.02s
+
+[13] ✗ 'something funny to watch'
+     Topics:   Comedy(9)  (expected: {9})
+     Style:    FUNNY        ✓
+     Duration: SHORT        ✗ expected ANY
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.98s
+
+[14] ✓ 'show me something new'
+     Topics:   Other(34)  (expected: set())
+     Style:    NEUTRAL      ✓
+     Duration: ANY          ✓
+     Intent:   EXPLORATION        ✓
+     Latency:  0.83s
+
+[15] ✗ "what's popular right now"
+     Topics:   Other(34), Film & TV(39)  (expected: set())
+     Style:    NEUTRAL      ✓
+     Duration: ANY          ✓
+     Intent:   EXPLORATION        ✗ expected SOCIAL
+     Latency:  0.89s
+
+[16] ✓ 'comedy but not slapstick, keep it short'
+     Topics:   Comedy(9)  (expected: {9})
+     Style:    FUNNY        ✓
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.99s
+
+[17] ✗ 'music videos, no sad songs'
+     Topics:   Music(2), Dance(1)  (expected: {2})
+     Style:    ENERGETIC    ✓
+     Duration: SHORT        ✗ expected ANY
+     Intent:   SPECIFIC_SEARCH    ✗ expected ENTERTAINMENT
+     Latency:  1.35s
+
+[18] ✗ 'celebrity interviews'
+     Topics:   Celebrity Entertainment(6)  (expected: {6})
+     Style:    INFORMATIVE  ✗ expected NEUTRAL
+     Duration: MEDIUM       ✓
+     Intent:   EXPLORATION        ✗ expected SPECIFIC_SEARCH
+     Latency:  1.21s
+
+[19] ✗ 'short drama romance series'
+     Topics:   Short Drama(32), Film & TV(39), Emotions/Relationships(19)  (expected: {32, 19})
+     Style:    DRAMATIC     ✓
+     Duration: SHORT        ✗ expected LONG
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  1.13s
+
+[20] ✗ 'aesthetic photography'
+     Topics:   Photography(26), Fashion(5), Attractiveness/Looks(8)  (expected: {26})
+     Style:    AESTHETIC    ✓
+     Duration: SHORT        ✓
+     Intent:   EXPLORATION        ✗ expected INSPIRATION
+     Latency:  1.33s
+
+[21] ✓ 'serious news analysis'
+     Topics:   Politics/News(23)  (expected: {23})
+     Style:    SERIOUS      ✓
+     Duration: LONG         ✓
+     Intent:   LEARNING           ✓
+     Latency:  1.33s
+
+[22] ✓ 'cute baby and kids moments'
+     Topics:   Parenting(25), Selfie(33)  (expected: {25})
+     Style:    CUTE         ✓
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  1.24s
+
+[23] ✓ 'quick daily life clips'
+     Topics:   Daily Life(11)  (expected: {11})
+     Style:    RELAXING     ✓
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.81s
+
+[24] ✓ 'long educational science documentaries'
+     Topics:   Education(14), Science & Law(29)  (expected: {29})
+     Style:    INFORMATIVE  ✓
+     Duration: LONG         ✓
+     Intent:   LEARNING           ✓
+     Latency:  1.02s
+
+[25] ✗ 'astrology and zodiac readings'
+     Topics:   Astrology/Fortune(24)  (expected: {24})
+     Style:    INFORMATIVE  ✗ expected RELAXING
+     Duration: ANY          ✗ expected MEDIUM
+     Intent:   LEARNING           ✗ expected ENTERTAINMENT
+     Latency:  1.07s
+
+[26] ✓ 'car reviews and test drives'
+     Topics:   Automobiles(18)  (expected: {18})
+     Style:    INFORMATIVE  ✓
+     Duration: MEDIUM       ✓
+     Intent:   LEARNING           ✓
+     Latency:  1.29s
+
+[27] ✗ 'weird and unusual things'
+     Topics:   Oddities(37), People's News(28)  (expected: {37})
+     Style:    AESTHETIC    ✗ expected FUNNY
+     Duration: SHORT        ✓
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.92s
+
+[28] ✗ 'gaming highlights and esports'
+     Topics:   Gaming(3)  (expected: {3})
+     Style:    ENERGETIC    ✓
+     Duration: SHORT        ✗ expected MEDIUM
+     Intent:   ENTERTAINMENT      ✓
+     Latency:  0.92s
+
+[29] ✗ 'home decoration inspiration'
+     Topics:   Real Estate/Home(36)  (expected: {36})
+     Style:    AESTHETIC    ✓
+     Duration: SHORT        ✗ expected MEDIUM
+     Intent:   INSPIRATION        ✓
+     Latency:  1.11s
+
+[30] ✗ 'health and wellness tips'
+     Topics:   Health(16)  (expected: {16})
+     Style:    INFORMATIVE  ✓
+     Duration: SHORT        ✗ expected MEDIUM
+     Intent:   LEARNING           ✓
+     Latency:  0.94s
+
+============================================================
+ Stage 1 Evaluation Summary
+============================================================
+  Queries evaluated: 30
+  Topic accuracy (Jaccard):  76.1%
+  Style accuracy:            90.0%
+  Duration accuracy:         70.0%
+  Intent type accuracy:      73.3%
+  Avg latency:               1.07s
+  Total time:                32.2s

@@ -13,6 +13,12 @@ Usage:
 import argparse
 import sys
 import time
+from pathlib import Path
+
+# Ensure project root is on sys.path so we can import from tests/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from dotenv import load_dotenv
 
