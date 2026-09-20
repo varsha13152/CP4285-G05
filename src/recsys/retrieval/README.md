@@ -1,4 +1,4 @@
-# Candidate Retrieval (Stages 2-3)
+# Candidate Retrieval (Stage 3)
 
 ## Input from Stage 1
 
