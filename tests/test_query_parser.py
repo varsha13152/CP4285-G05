@@ -13,6 +13,7 @@ import pytest
 
 from recsys.contracts.enums import ContentStyle, DurationPreference, QueryIntentType
 from recsys.contracts.models import QueryIntent
+from recsys.intent.embeddings import NullEmbedder, SoclaasEmbedder
 from recsys.intent.query_parser import QueryParser, _default_query_intent
 
 
@@ -189,3 +190,98 @@ class TestQueryParser:
             with patch.dict("os.environ", {}, clear=True):
                 with pytest.raises(ValueError, match="No API key"):
                     QueryParser(api_key="")
+
+    def test_embedder_attaches_embedding(self, parser: QueryParser) -> None:
+        """When an embedder returns a non-empty vector, it's attached to QueryIntent."""
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.1, 0.2, 0.3]
+        parser._embedder = mock_embedder
+
+        raw = {
+            "topics": [{"category_id": 12, "confidence": 0.9}],
+            "style": "FUNNY",
+            "duration": "SHORT",
+            "intent_type": "ENTERTAINMENT",
+            "negative_constraints": [],
+            "semantic_summary": "fun food",
+        }
+        parser._client.chat.completions.create.return_value = _mock_llm_response(raw)
+
+        result = parser.parse("fun food")
+        assert result.query_embedding == [0.1, 0.2, 0.3]
+        mock_embedder.embed.assert_called_once_with("fun food")
+
+    def test_null_embedder_leaves_none(self, parser: QueryParser) -> None:
+        """NullEmbedder returns [], so query_embedding stays None."""
+        parser._embedder = NullEmbedder()
+
+        raw = {
+            "topics": [],
+            "style": "NEUTRAL",
+            "duration": "ANY",
+            "intent_type": "EXPLORATION",
+            "negative_constraints": [],
+            "semantic_summary": "test",
+        }
+        parser._client.chat.completions.create.return_value = _mock_llm_response(raw)
+
+        result = parser.parse("test")
+        assert result.query_embedding is None
+
+
+class TestSoclaasEmbedder:
+    def test_embed_single(self) -> None:
+        with patch("recsys.intent.embeddings.OpenAI") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+
+            # Mock the embeddings response
+            mock_data = MagicMock()
+            mock_data.embedding = [0.1] * 1024
+            mock_response = MagicMock()
+            mock_response.data = [mock_data]
+            mock_client.embeddings.create.return_value = mock_response
+
+            embedder = SoclaasEmbedder(api_key="test-key")
+            result = embedder.embed("hello")
+
+            assert len(result) == 1024
+            mock_client.embeddings.create.assert_called_once_with(
+                model="bge-m3", input=["hello"],
+            )
+
+    def test_embed_batch(self) -> None:
+        with patch("recsys.intent.embeddings.OpenAI") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+
+            mock_data_1 = MagicMock()
+            mock_data_1.embedding = [0.1] * 1024
+            mock_data_2 = MagicMock()
+            mock_data_2.embedding = [0.2] * 1024
+            mock_response = MagicMock()
+            mock_response.data = [mock_data_1, mock_data_2]
+            mock_client.embeddings.create.return_value = mock_response
+
+            embedder = SoclaasEmbedder(api_key="test-key")
+            result = embedder.embed_batch(["a", "b"])
+
+            assert len(result) == 2
+            assert len(result[0]) == 1024
+            assert len(result[1]) == 1024
+
+    def test_embed_failure_returns_empty(self) -> None:
+        with patch("recsys.intent.embeddings.OpenAI") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.embeddings.create.side_effect = RuntimeError("API down")
+
+            embedder = SoclaasEmbedder(api_key="test-key")
+            result = embedder.embed("hello")
+            assert result == []
+
+    def test_no_api_key_raises(self) -> None:
+        with patch("recsys.intent.embeddings.OpenAI"):
+            with patch.dict("os.environ", {}, clear=True):
+                with pytest.raises(ValueError, match="No API key"):
+                    SoclaasEmbedder(api_key="")

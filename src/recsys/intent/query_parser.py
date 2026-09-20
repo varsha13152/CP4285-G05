@@ -31,6 +31,7 @@ from openai import OpenAI
 from recsys.contracts.enums import ContentStyle, DurationPreference, QueryIntentType
 from recsys.contracts.models import CategoryMatch, QueryIntent
 from recsys.data.category_index import CategoryIndex
+from recsys.intent.embeddings import NullEmbedder, QueryEmbedder
 
 load_dotenv()
 
@@ -98,6 +99,9 @@ class QueryParser:
         API key.  Falls back to ``SOCLAAS_API_KEY`` env var.
     category_index : CategoryIndex | None
         Bilingual category index.  Created automatically if not supplied.
+    embedder : QueryEmbedder | None
+        Embedding provider.  If supplied, ``parse()`` attaches a query embedding
+        to each ``QueryIntent``.  Defaults to ``NullEmbedder`` (no embeddings).
     """
 
     def __init__(
@@ -106,6 +110,7 @@ class QueryParser:
         base_url: str | None = None,
         api_key: str | None = None,
         category_index: CategoryIndex | None = None,
+        embedder: QueryEmbedder | None = None,
     ) -> None:
         self._base_url = base_url or os.environ.get("SOCLAAS_BASE_URL", _DEFAULT_BASE_URL)
         self._api_key = api_key or os.environ.get("SOCLAAS_API_KEY", "")
@@ -116,6 +121,7 @@ class QueryParser:
 
         self._client = OpenAI(base_url=self._base_url, api_key=self._api_key)
         self._index = category_index or CategoryIndex()
+        self._embedder: QueryEmbedder = embedder or NullEmbedder()
         self._system_prompt = SYSTEM_PROMPT.format(
             category_index_string=self._index.to_prompt_string(),
         )
@@ -143,7 +149,14 @@ class QueryParser:
             logger.warning("LLM returned invalid JSON for query %r", query)
             return _default_query_intent(query)
 
-        return self._build_intent(query, raw)
+        intent = self._build_intent(query, raw)
+
+        # Attach query embedding if an embedder is configured
+        embedding = self._embedder.embed(query)
+        if embedding:
+            intent.query_embedding = embedding
+
+        return intent
 
     def parse_batch(self, queries: list[str]) -> list[QueryIntent]:
         """Parse multiple queries sequentially."""

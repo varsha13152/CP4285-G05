@@ -23,14 +23,20 @@ def main() -> None:
     parser.add_argument("--num_candidates", type=int, default=100)
     args = parser.parse_args()
 
-    from recsys.intent import QueryParser
+    from recsys.intent import QueryParser, SoclaasEmbedder, NullEmbedder
     from recsys.routing import QueryRouter
 
     # --- Stage 1: Parse query ---
     print(f"Query: {args.query!r}\n")
 
+    # Try bge-m3 embeddings; fall back to NullEmbedder if unavailable
+    try:
+        embedder = SoclaasEmbedder()
+    except (ValueError, Exception):
+        embedder = NullEmbedder()
+
     t0 = time.time()
-    query_parser = QueryParser()
+    query_parser = QueryParser(embedder=embedder)
     intent = query_parser.parse(args.query)
     parse_time = time.time() - t0
 
@@ -49,6 +55,10 @@ def main() -> None:
         print(f"    - {t.english_name} ({t.chinese_name}, id={t.category_id}, conf={t.confidence:.2f})")
     if not intent.topics:
         print("    (none matched)")
+    if intent.query_embedding:
+        print(f"  Embedding:     dim={len(intent.query_embedding)} (bge-m3)")
+    else:
+        print(f"  Embedding:     (none)")
     print(f"  Parse time:    {parse_time:.2f}s")
 
     # --- Routing ---
