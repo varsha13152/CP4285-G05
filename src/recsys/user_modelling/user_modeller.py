@@ -196,7 +196,7 @@ class UserModeller:
             total_interactions / active_days if active_days else 0.0
         )
         recency_days = max(
-            0, int(round((self._global_last_ts - float(rec["last_ts"])) / _SECONDS_PER_DAY))
+            0, round((self._global_last_ts - float(rec["last_ts"])) / _SECONDS_PER_DAY)
         )
 
         return EngagementProfile(
