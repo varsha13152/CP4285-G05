@@ -108,6 +108,7 @@ class UserModeller:
         unique_videos = np.sort(interactions["video_id"].unique())
         self._user_to_row = {int(u): i for i, u in enumerate(unique_users)}
         self._video_to_col = {int(v): i for i, v in enumerate(unique_videos)}
+        self._col_to_video = unique_videos  # column index -> video_id (np.ndarray)
         n_users = len(unique_users)
         n_videos = len(unique_videos)
 
@@ -210,6 +211,7 @@ class UserModeller:
             avg_session_length=float(avg_session_length),
             recency_days=recency_days,
             user_vector=self._user_factors[row].tolist(),
+            seen_video_ids=self._seen_video_ids(user_id),
         )
 
     def build_session_profile(
@@ -221,6 +223,30 @@ class UserModeller:
         query-conditioned session blend is intentionally not yet implemented.
         """
         return self.build_profile(user_id)
+
+    # ------------------------------------------------------------------
+    # exports for downstream candidate generation
+    # ------------------------------------------------------------------
+    @property
+    def item_factors(self) -> np.ndarray:
+        """The learned item latent-factor matrix ``V`` — shape ``(n_videos, factors)``.
+
+        Row ``i`` is the vector for ``self.item_ids[i]``. Index this into an ANN /
+        MIPS structure for candidate generation: the user's ``user_vector`` is the
+        query and a large dot product predicts affinity. Returns the live array —
+        treat as read-only. Comparable only with vectors from *this* training run.
+        """
+        return self._item_factors
+
+    @property
+    def item_ids(self) -> np.ndarray:
+        """Video ids aligned to the rows of :attr:`item_factors` (``item_ids[col]``
+        is the ``video_id`` for row ``col``) — decodes ANN results back to ids."""
+        return self._col_to_video
+
+    def column_for_video_id(self, video_id: int) -> int | None:
+        """Row index of *video_id* in :attr:`item_factors`, or ``None`` if unseen."""
+        return self._video_to_col.get(int(video_id))
 
     # ------------------------------------------------------------------
     # internals
@@ -244,6 +270,12 @@ class UserModeller:
         category_distribution = {cat: n / total for cat, n in ranked}
         return top_category_ids, category_distribution
 
+    def _seen_video_ids(self, user_id: int) -> set[int]:
+        idx = self._user_indices.get(int(user_id))
+        if idx is None:
+            return set()
+        return {int(v) for v in self._video_ids[idx]}
+
     @staticmethod
     def _cold_start_profile(user_id: int) -> EngagementProfile:
         return EngagementProfile(
@@ -257,4 +289,5 @@ class UserModeller:
             avg_session_length=0.0,
             recency_days=0,
             user_vector=[],
+            seen_video_ids=set(),
         )

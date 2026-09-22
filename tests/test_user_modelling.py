@@ -124,3 +124,32 @@ def test_confidence_alpha_knob_trains(sample_interactions, sample_item_categorie
     profile = modeller.build_profile(user_id=1)
     assert len(profile.user_vector) == FACTORS
     assert profile.avg_watch_ratio == pytest.approx(0.575)  # stats independent of knob
+
+
+# ---------------------------------------------------------------------------
+# candidate-generation exports (item factors + id map) and the seen-set
+# ---------------------------------------------------------------------------
+
+def test_item_factors_shape(modeller, sample_interactions):
+    n_videos = sample_interactions["video_id"].nunique()
+    assert modeller.item_factors.shape == (n_videos, FACTORS)
+
+
+def test_item_ids_align_with_item_factors(modeller):
+    ids = modeller.item_ids
+    assert len(ids) == modeller.item_factors.shape[0]
+    for col, vid in enumerate(ids):                       # round-trip
+        assert modeller.column_for_video_id(int(vid)) == col
+
+
+def test_column_for_unknown_video_is_none(modeller):
+    assert modeller.column_for_video_id(999999) is None
+
+
+def test_seen_video_ids_on_profile(modeller):
+    # user 1 watched videos 10, 20, 30, 40 in the fixture
+    assert modeller.build_profile(1).seen_video_ids == {10, 20, 30, 40}
+
+
+def test_seen_video_ids_empty_for_unknown_user(modeller):
+    assert modeller.build_profile(99999).seen_video_ids == set()

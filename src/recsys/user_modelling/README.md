@@ -60,6 +60,7 @@ and how the next stage is expected to use it.
 | `category_distribution` | Normalised category shares (sums to `1.0`). | category counts ÷ total | Soft re-rank toward habitual categories; diversity control. |
 | `avg_session_length` | **Proxy**: average interactions per active day. Not a true session (no time-gap segmentation yet). | `total_interactions / active_days` | Placeholder until the session model lands; read as daily intensity, not sessions. |
 | `recency_days` | Freshness — active vs dormant. Relative to the **dataset's** last timestamp, not "today". | `(dataset_last_ts − user_last_ts) / 86400` | Freshness weighting / decay for dormant users. |
+| `seen_video_ids` | Distinct video ids the user has already interacted with. **Empty** for cold-start users. | the `video_id`s in the user's training rows | Filter already-watched items out of generated candidates (`c not in profile.seen_video_ids`). |
 
 **Current wiring reality.** Downstream stages do **not** read these fields yet —
 `QueryRouter.route()` carries the whole `EngagementProfile` through unchanged
@@ -68,14 +69,28 @@ inside `QueryRetrievalRequest`, and Stage 3 (retrieval) + ranking are where the
 be the primary signal is `user_vector`; the rest are side-signals the same
 profile conveniently carries.
 
-> **Note — item factors (`V`).** One ALS fit learns *both* a user matrix `U`
-> (`user_factors`) and an item matrix `V` (`item_factors`). Only the per-user
-> `user_vector` = `U[row]` is exposed on the profile today; `V` is held on the
-> `UserModeller` instance but not surfaced. A predicted score or candidate list
-> needs both (`U[u]·V[i]`), so item-side scoring is planned to live behind a
-> `UserModeller.recommend()` / `score()` method (wrapping `implicit`'s
-> `model.recommend`), keeping the `video_id ↔ column` mapping encapsulated
-> rather than returning raw `V` through the contract.
+## Exports for candidate generation
+
+One ALS fit learns *both* a user matrix `U` (`user_factors`) and an item matrix
+`V` (`item_factors`). The per-user `user_vector` = `U[row]` rides on the
+`EngagementProfile`; the item side is exposed as **global model artifacts via
+getters on the `UserModeller` instance** — they are shared across users, so they
+live on the modeller, **not** on the per-user profile.
+
+| Export | Returns | Meaning |
+|--------|---------|---------|
+| `item_factors` | `np.ndarray` `(n_videos, factors)` | the learned item matrix `V`, the **live** array (read-only). Row `col` is the vector for `item_ids[col]`. |
+| `item_ids` | `np.ndarray` `(n_videos,)` | the `video_id` for each row of `item_factors` — decodes ANN results back to ids. |
+| `column_for_video_id(video_id)` | `int`, else `None` | row index of `video_id` in `item_factors`; `None` if it was never trained on. |
+
+Stage 3 indexes `item_factors` into an inner-product (MIPS) ANN and queries it
+with a user's `user_vector`: a large dot product `U[u]·V[i]` predicts affinity.
+`item_ids` / `column_for_video_id` are the `video_id ↔ row` bridge, so the
+mapping stays encapsulated rather than leaking through the contract. These
+factors are comparable **only within one training run** — the latent axes are
+re-randomised each fit, so vectors from different runs are not interchangeable.
+`UserModeller` stops at producing these artifacts; retrieval, scoring, ANN
+indexing and query blending are Stage 3.
 
 ## Knobs (`UserModeller.__init__`)
 
