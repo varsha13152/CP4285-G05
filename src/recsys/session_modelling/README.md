@@ -25,9 +25,17 @@ A **first-order Markov next-item baseline** over *constructed* sessions. Two pie
   `P(next = j | current = i)` from within-session `(i → j)` counts, backing off
   to global popularity for cold items or an empty session.
 
-It is the **smallest-sufficient temporal model** — it conditions on the **last
-item only** (the Markov assumption) — the baseline that GRU4Rec / SASRec must
-beat later.
+**How it scores.** It pools every within-session `(i → j)` adjacency into counts,
+then normalises **per source item**, so each item's next-item probabilities sum to
+1. To recommend, it takes the **last** watched video, looks up that distribution,
+and returns the top-`k` by probability. An item that only ever *ended* sessions
+(no outgoing transitions), an unseen item, or an empty session **backs off to
+global popularity** — so a ranked list always comes back. Because only the last
+item is used, cross-session boundary pairs are never counted; the ablation below
+shows dropping them changes nothing.
+
+It is the **smallest-sufficient temporal model** — the baseline that GRU4Rec /
+SASRec must beat later.
 
 ### Why a count model (no new dependency)
 This *is* the standard implementation. The session-rec benchmark
@@ -71,25 +79,50 @@ accuracy.
 
 ## Usage
 
+`SessionModeller` is the pipeline entry point — it sessionises and fits the Markov
+model **on construction**, then exposes what the next stage needs:
+
+```python
+from recsys.session_modelling import SessionModeller
+
+sm = SessionModeller(strategy="fixed")             # trains on data/raw/big_matrix.csv
+sm.predict_next(current_session_video_ids, k=10)   # SESSION candidates: [(video_id, score), ...]
+sm.avg_session_length_for(user_id)                 # real avg session length (a ranking feature)
+```
+
+The low-level pieces are usable directly too (the eval script and future GRU4Rec
+training input go through these):
+
 ```python
 from recsys.session_modelling import Sessioniser, MarkovSessionModel
 
-sess = Sessioniser(strategy="fixed", gap_minutes=30.0)
-sequences = sess.to_sequences(interactions_df)   # ordered video_id lists, one per session
+sequences = Sessioniser(strategy="fixed").to_sequences(interactions_df)  # per-session id lists
 model = MarkovSessionModel().fit(sequences)
-model.predict_next([current_video_id], k=10)     # [(video_id, score), ...] top-10
 ```
 
-## Contract touchpoints — what the next stage consumes
+## What's exposed & how the next stage uses it
 
-`Sessioniser` / `MarkovSessionModel` stop at producing these artifacts;
-retrieval (Stage 3) and profile assembly consume them.
+Stage 3 (candidate generation) blends several *lanes*; this module owns the
+**SESSION** lane. What it hands over:
 
-| Artifact | Returns | Downstream use |
-|----------|---------|----------------|
-| `MarkovSessionModel.predict_next(recent)` | `[(video_id, score), …]` | the **SESSION** retrieval lane + a ranking feature |
-| `Sessioniser.session_stats()` | per-user session lengths | fills `EngagementProfile.avg_session_length` (replaces the daily-intensity proxy) |
+| Exposed | Returns | How the next stage uses it |
+|---------|---------|----------------------------|
+| `SessionModeller.predict_next(recent, k)` | ranked `[(video_id, score), …]` | the SESSION candidate list for the user's current session |
+| `SessionModeller.avg_session_length_for(user_id)` | `float` | real `EngagementProfile.avg_session_length` (a ranking feature, not candidates) |
+| `RetrievalStrategy.SESSION` + its router weight | enum + weight inside `QueryRetrievalRequest.strategies` | how much to trust the SESSION lane per query intent (high for browsing, low for search) |
 | `Sessioniser.to_sequences()` | ordered id lists | training input for GRU4Rec later |
+
+**No ANN for this lane.** `u_long` produces dense vectors, so it needs a MIPS/ANN
+index over `item_factors` to search them. The session model is a `dict[item →
+ranked next-items]`: candidate generation is a **hash lookup on the last watched
+video that is already sorted** — the fitted table *is* the index. Stage 3 just
+calls `predict_next(...)`; there is nothing extra to build.
+
+**Not wired end-to-end yet.** No retriever consumes `RetrievalStrategy.SESSION`
+— the weight rides in `QueryRetrievalRequest.strategies` awaiting a Stage 3 that
+doesn't exist. `UserModeller.build_session_profile` already swaps in the real
+`avg_session_length`, but folding the session next-item scores into the profile
+as a query-time lens is still deferred.
 
 ## Knobs (`Sessioniser.__init__`)
 
@@ -105,7 +138,8 @@ retrieval (Stage 3) and profile assembly consume them.
 ## Eval results
 
 Full data — all **7,176 users / 12.5M interactions**; `chronological_session_split`,
-`test_ratio=0.2`. HR only (MRR / NDCG are computed but not featured).
+`test_ratio=0.2`. **HR@k** = fraction of test steps where the true next video is in
+the model's top-`k` predictions (`k` = 10, 20); MRR / NDCG are computed but not featured.
 
 | Strategy | Sessions | Avg len | HR@10 | HR@20 | Eval pairs | Fit+eval |
 |----------|----------|---------|-------|-------|------------|----------|
@@ -180,11 +214,16 @@ subset (e.g. `--sample-users 2000` ≈ 15–35 s/strategy).
 
 ## Deferred
 
+* **Query-conditioned blend** — `build_session_profile` swaps in the real session
+  length but does not yet fold the session next-item scores into the profile as a
+  query-time lens.
+* **Stage 3 consumption** — a retriever that actually reads the SESSION lane.
 * **GRU4Rec / SASRec** — the neural sequence *models to beat*.
 * **Per-user tuning** — sweeping `gap_minutes` / `pct` against downstream accuracy.
-* **Phase-2 wiring** — `RetrievalStrategy.SESSION`, router weights, and the
-  `SessionModeller` that `build_session_profile` delegates to.
 * **MRR / NDCG reporting** — computed already; not featured while HR is the headline.
+
+*Done in Phase 2:* `SessionModeller`, `RetrievalStrategy.SESSION` + router weights,
+and the real `avg_session_length` in `build_session_profile`.
 
 ## Tests
 
