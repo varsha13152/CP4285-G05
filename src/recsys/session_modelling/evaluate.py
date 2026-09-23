@@ -27,7 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from recsys.data.schema import TIMESTAMP, VIDEO_ID
+from recsys.data.schema import TIMESTAMP, USER_ID, VIDEO_ID
 from recsys.session_modelling.markov import MarkovSessionModel
 
 _SESSION_ID = "session_id"
@@ -58,6 +58,56 @@ def chronological_session_split(
         ]
 
     return sequences(train_ids), sequences(test_ids)
+
+
+def split_by_timestamp(
+    df: pd.DataFrame, cutoff_quantile: float = 0.8
+) -> tuple[pd.DataFrame, list[list[int]]]:
+    """Split raw interactions at **one global time cutoff** for a *fair*
+    cross-strategy ablation.
+
+    Unlike :func:`chronological_session_split` (which splits *by session*, so the
+    test set changes when the sessionisation does), this cuts the whole
+    interaction stream at a single ``timestamp`` quantile:
+
+    * **train** — the returned ``train_df`` holds every interaction *before* the
+      cutoff, still **raw** (un-sessionised). The caller sessionises it per
+      strategy (``Sessioniser(strategy=...).to_sequences(train_df)``) and fits,
+      so only the *train transition table* varies across strategies.
+    * **test** — ``test_sequences`` are each user's interactions *at or after* the
+      cutoff, in time order, one list per user. These are
+      **strategy-independent** (no session boundaries applied), so every strategy
+      is scored on the **same** ``(context, target)`` pairs — the definition of a
+      fair comparison here.
+
+    Feeding ``test_sequences`` to :func:`evaluate_next_item` yields raw
+    consecutive within-user next-item pairs after the cutoff. The first
+    post-cutoff interaction of each user opens its list, so the single
+    boundary-straddling pair (last-train → first-test item) is not scored; this
+    is identical for every strategy and so does not bias the comparison.
+
+    No leakage: ``train_df`` is strictly before the cutoff, so a model fit on it
+    never sees a test interaction.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Raw interactions with at least ``user_id``, ``video_id`` and
+        ``timestamp`` columns (need **not** be sessionised).
+    cutoff_quantile : float
+        Quantile (0–1) of the global ``timestamp`` distribution used as the
+        train/test boundary (default 0.8 = the last 20% of the timeline is test).
+    """
+    cutoff = df[TIMESTAMP].quantile(cutoff_quantile)
+    train_df = df[df[TIMESTAMP] < cutoff]
+    test_df = df[df[TIMESTAMP] >= cutoff].sort_values(
+        [USER_ID, TIMESTAMP], kind="mergesort"
+    )
+    test_sequences = [
+        [int(v) for v in g[VIDEO_ID].to_numpy()]
+        for _, g in test_df.groupby(USER_ID, sort=True)
+    ]
+    return train_df, test_sequences
 
 
 def evaluate_next_item(

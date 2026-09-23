@@ -131,7 +131,31 @@ ordering, 0.098 vs 0.048). For an apples-to-apples comparison of **all three**
 strategies on one **shared** test set, see the ablation (`--ablation` /
 `split_by_timestamp`) below.
 
-<!-- ABLATION_TABLE -->
+### Ablation — does sessionisation help? (fair, shared test set)
+
+`--ablation` (`split_by_timestamp`) puts all three strategies on **one shared
+test set**: a single global `timestamp` cutoff (q=0.8) — train is every
+interaction before it, test is the **raw consecutive** next-item pairs after it,
+**identical** across strategies. Only the *train* transition table changes with
+the sessionisation. Full data — 2,499,221 test pairs across 6,941 users:
+
+| Strategy | Train sessions | HR@10 | HR@20 |
+|----------|----------------|-------|-------|
+| `fixed` (30 min) | 625,942 | 0.1320 | 0.1406 |
+| `per_user_pct` (p90) | 699,457 | 0.1321 | 0.1407 |
+| `single` (no cutting) | 7,176 | 0.1320 | 0.1401 |
+
+**Verdict: sessionisation neither helps nor hurts first-order Markov here** — all
+three land at HR@10 ≈ 0.132, within 0.0001 of each other. Cutting the timeline
+into sessions only drops the cross-boundary `(i → j)` pairs (~7% of all pairs); a
+last-item model barely notices, because those boundary pairs carry little
+next-item signal. The apparent `fixed` > `per_user_pct` gap under
+`chronological_session_split` was a **test-set artifact** of splitting by session,
+not a real modelling effect. (These HR values sit above the by-session table
+because the shared test set is a different, larger pair population — each table is
+internally consistent but the two are not directly comparable.) Practical
+takeaway: keep `fixed` 30 min as the default (simplest, standard), and spend the
+modelling budget on the sequence models (GRU4Rec / SASRec), not on tuning the cut.
 
 ## Deferred
 

@@ -10,6 +10,7 @@ Usage::
     python scripts/evaluate_session_baseline.py                     # all strategies, full big_matrix
     python scripts/evaluate_session_baseline.py --sample-users 2000 # faster sample
     python scripts/evaluate_session_baseline.py --strategies fixed --gap-minutes 30
+    python scripts/evaluate_session_baseline.py --ablation          # fair shared-test-set comparison
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from recsys.session_modelling import MarkovSessionModel, Sessioniser
 from recsys.session_modelling.evaluate import (
     chronological_session_split,
     evaluate_next_item,
+    split_by_timestamp,
 )
 
 
@@ -55,6 +57,35 @@ def _make(strategy: str, args: argparse.Namespace) -> Sessioniser:
     )
 
 
+def _run_ablation(df: pd.DataFrame, args: argparse.Namespace, ks: tuple[int, ...]) -> None:
+    """Fair cross-strategy ablation: one global time cutoff gives every strategy
+    the **same** held-out test pairs; only the train transition table changes."""
+    train_df, test_seqs = split_by_timestamp(df, cutoff_quantile=args.cutoff_quantile)
+    n_test_pairs = sum(max(0, len(s) - 1) for s in test_seqs)
+    print(
+        f"\nablation | global timestamp cutoff q={args.cutoff_quantile} "
+        f"| train {len(train_df):,} interactions "
+        f"| shared test {n_test_pairs:,} pairs across {len(test_seqs):,} users",
+        flush=True,
+    )
+    rows = []
+    for strategy in args.strategies.split(","):
+        t0 = time.time()
+        train_seqs = _make(strategy, args).to_sequences(train_df)
+        model = MarkovSessionModel().fit(train_seqs)
+        metrics = evaluate_next_item(model, test_seqs, ks=ks)
+        dt = time.time() - t0
+        line = {"strategy": strategy, "train_sessions": len(train_seqs)}
+        for k in ks:
+            line[f"HR@{k}"] = round(metrics[f"HR@{k}"], 4)
+        line["secs"] = round(dt, 1)
+        hr = "  ".join(f"HR@{k} {metrics[f'HR@{k}']:.4f}" for k in ks)
+        print(f"    [{strategy}] {hr}  ({len(train_seqs):,} train sessions, {dt:.1f}s)")
+        rows.append(line)
+    print("\n=== ablation summary (shared test set, HR only) ===")
+    print(pd.DataFrame(rows).to_string(index=False))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-dir", default="data/raw")
@@ -66,10 +97,25 @@ def main() -> None:
     p.add_argument("--floor-minutes", type=float, default=15.0)
     p.add_argument("--min-interactions", type=int, default=20)
     p.add_argument("--ks", default="10,20")
+    p.add_argument(
+        "--ablation",
+        action="store_true",
+        help="fair cross-strategy comparison on one shared, time-based test set",
+    )
+    p.add_argument(
+        "--cutoff-quantile",
+        type=float,
+        default=0.8,
+        help="global timestamp quantile for the ablation train/test split",
+    )
     args = p.parse_args()
 
     ks = tuple(int(x) for x in args.ks.split(","))
     df = _load(args.data_dir, args.sample_users)
+
+    if args.ablation:
+        _run_ablation(df, args, ks)
+        return
 
     rows = []
     for strategy in args.strategies.split(","):
