@@ -157,6 +157,27 @@ internally consistent but the two are not directly comparable.) Practical
 takeaway: keep `fixed` 30 min as the default (simplest, standard), and spend the
 modelling budget on the sequence models (GRU4Rec / SASRec), not on tuning the cut.
 
+### Reproducing
+
+Full runs over `data/raw/big_matrix.csv` (12.5M interactions, 7,176 users),
+single-threaded pandas:
+
+```bash
+python scripts/evaluate_session_baseline.py              # main eval (by-session split)
+python scripts/evaluate_session_baseline.py --ablation   # fair shared-test-set ablation
+```
+
+Runtime (fit + eval **per strategy**; excludes the one-time ~1 GB CSV load of
+~0.5–1 min):
+
+| Run | `fixed` | `per_user_pct` | `single` |
+|-----|---------|----------------|----------|
+| main eval | 70.5 s | 75.4 s | 55.4 s |
+| ablation | 89.4 s | 63.6 s | 32.9 s |
+
+≈3–4 min of compute per run after the load. Add `--sample-users N` for a fast
+subset (e.g. `--sample-users 2000` ≈ 15–35 s/strategy).
+
 ## Deferred
 
 * **GRU4Rec / SASRec** — the neural sequence *models to beat*.
