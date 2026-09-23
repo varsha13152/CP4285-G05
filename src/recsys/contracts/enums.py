@@ -44,3 +44,4 @@ class RetrievalStrategy(Enum):
     CONTENT_BASED = auto()
     POPULARITY = auto()
     SOCIAL = auto()
+    SESSION = auto()  # short-term in-session next-item lane (see session_modelling)

@@ -33,6 +33,13 @@ class EngagementProfile:
     category_distribution: dict[int, float]
     avg_session_length: float
     recency_days: int
+    # Learned long-term (u_long) latent factor vector from matrix factorization
+    # (implicit ALS over big_matrix). Empty for unknown/cold-start users.
+    # Consumed downstream purely as a ranking signal, never as a hard filter.
+    user_vector: list[float] = field(default_factory=list)
+    # Distinct video ids the user has already interacted with — for filtering
+    # already-seen items out of generated candidates. Empty for cold-start users.
+    seen_video_ids: set[int] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------
