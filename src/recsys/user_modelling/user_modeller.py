@@ -31,12 +31,17 @@ Usage::
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 
 from recsys.contracts.models import EngagementProfile, QueryIntent
 from recsys.data.loader import load_kuairec
+
+if TYPE_CHECKING:
+    from recsys.session_modelling import SessionModeller
 
 _SECONDS_PER_DAY = 86_400.0
 
@@ -73,6 +78,11 @@ class UserModeller:
         *interactions*, category stats are left empty (a valid stub).
     show_progress : bool
         Whether the ALS fit prints a progress bar.
+    session_modeller : SessionModeller | None
+        Optional short-term session model (``recsys.session_modelling``). When
+        set, :meth:`build_session_profile` replaces the ``avg_session_length``
+        proxy with its real per-user value (and, later, will blend its next-item
+        scores). ``None`` keeps the long-term-only behaviour.
     """
 
     def __init__(
@@ -86,12 +96,14 @@ class UserModeller:
         interactions: pd.DataFrame | None = None,
         item_categories: pd.DataFrame | None = None,
         show_progress: bool = False,
+        session_modeller: SessionModeller | None = None,
     ) -> None:
         # Lazy import so importing the package does not hard-require `implicit`
         # unless a model is actually trained.
         from implicit.als import AlternatingLeastSquares
 
         self.factors = factors
+        self._session_modeller = session_modeller
 
         if interactions is None:
             data = load_kuairec(data_dir, load_big=True)
@@ -217,12 +229,20 @@ class UserModeller:
     def build_session_profile(
         self, user_id: int, query_intent: QueryIntent
     ) -> EngagementProfile:
-        """Session-aware profile blending history with the current query.
+        """Session-aware profile: the long-term profile with its
+        ``avg_session_length`` proxy replaced by the **real** per-user session
+        length from the injected :class:`SessionModeller`.
 
-        Deferred phase: for now this delegates to :meth:`build_profile`; the
-        query-conditioned session blend is intentionally not yet implemented.
+        With no session model (``session_modeller=None``) this falls back to
+        :meth:`build_profile` unchanged. The query-conditioned session *blend*
+        (the QCSAR differentiator — folding ``query_intent`` and the session
+        next-item scores into the profile) is still deferred; only the
+        session-length signal is wired in so far.
         """
-        return self.build_profile(user_id)
+        profile = self.build_profile(user_id)
+        if self._session_modeller is not None:
+            profile.avg_session_length = self._session_modeller.avg_session_length_for(user_id)
+        return profile
 
     # ------------------------------------------------------------------
     # exports for downstream candidate generation

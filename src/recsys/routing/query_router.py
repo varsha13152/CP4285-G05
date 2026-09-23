@@ -25,42 +25,50 @@ from recsys.contracts.models import (
     StrategyWeight,
 )
 
-
 # ---------------------------------------------------------------------------
 # Strategy weights per query intent type
 # ---------------------------------------------------------------------------
 
+# SESSION is the short-term in-session next-item lane (session_modelling):
+# weighted high for open-ended browsing (EXPLORATION / ENTERTAINMENT), low for
+# goal-directed lookups (SPECIFIC_SEARCH / LEARNING). Each list sums to ~1.0.
 _STRATEGY_MAP: dict[QueryIntentType, list[StrategyWeight]] = {
     QueryIntentType.ENTERTAINMENT: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.4),
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.4),
+        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.3),
+        StrategyWeight(RetrievalStrategy.SESSION, 0.3),
+        StrategyWeight(RetrievalStrategy.POPULARITY, 0.2),
         StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
     ],
     QueryIntentType.LEARNING: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.7),
+        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.6),
         StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
         StrategyWeight(RetrievalStrategy.POPULARITY, 0.1),
+        StrategyWeight(RetrievalStrategy.SESSION, 0.1),
     ],
     QueryIntentType.SPECIFIC_SEARCH: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.8),
+        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.7),
         StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.1),
         StrategyWeight(RetrievalStrategy.POPULARITY, 0.1),
+        StrategyWeight(RetrievalStrategy.SESSION, 0.1),
     ],
     QueryIntentType.SOCIAL: [
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.5),
+        StrategyWeight(RetrievalStrategy.POPULARITY, 0.4),
         StrategyWeight(RetrievalStrategy.SOCIAL, 0.3),
         StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.2),
+        StrategyWeight(RetrievalStrategy.SESSION, 0.1),
     ],
     QueryIntentType.EXPLORATION: [
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.3),
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.3),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
-        StrategyWeight(RetrievalStrategy.SOCIAL, 0.2),
+        StrategyWeight(RetrievalStrategy.SESSION, 0.3),
+        StrategyWeight(RetrievalStrategy.POPULARITY, 0.2),
+        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.2),
+        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.15),
+        StrategyWeight(RetrievalStrategy.SOCIAL, 0.15),
     ],
     QueryIntentType.INSPIRATION: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.5),
+        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.4),
         StrategyWeight(RetrievalStrategy.POPULARITY, 0.3),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
+        StrategyWeight(RetrievalStrategy.SESSION, 0.2),
+        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.1),
     ],
 }
 

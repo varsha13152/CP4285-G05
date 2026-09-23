@@ -109,6 +109,29 @@ def test_build_session_profile_delegates(modeller, sample_query_intent):
     assert session.total_interactions == base.total_interactions
 
 
+def test_build_session_profile_uses_real_session_length(
+    sample_interactions, sample_item_categories, sample_query_intent
+):
+    # With a SessionModeller injected, avg_session_length switches from the
+    # daily-intensity proxy to the real session length; the long-term signal
+    # (user_vector) is preserved.
+    from recsys.session_modelling import SessionModeller
+
+    sm = SessionModeller(interactions=sample_interactions)  # user 1 -> one 4-video session
+    modeller = UserModeller(
+        interactions=sample_interactions,
+        item_categories=sample_item_categories,
+        factors=FACTORS,
+        iterations=5,
+        session_modeller=sm,
+    )
+    base = modeller.build_profile(user_id=1)
+    session = modeller.build_session_profile(user_id=1, query_intent=sample_query_intent)
+    assert base.avg_session_length == pytest.approx(1.0)     # proxy: 4 interactions / 4 days
+    assert session.avg_session_length == pytest.approx(4.0)  # real: one 4-video session
+    assert session.user_vector == base.user_vector          # long-term signal preserved
+
+
 # ---------------------------------------------------------------------------
 # confidence transform knob
 # ---------------------------------------------------------------------------
