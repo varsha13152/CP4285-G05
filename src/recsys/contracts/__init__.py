@@ -4,7 +4,7 @@ from recsys.contracts.enums import (
     ContentStyle,
     DurationPreference,
     QueryIntentType,
-    RetrievalStrategy,
+    RetrievalSource,
 )
 from recsys.contracts.models import (
     Candidate,
@@ -15,21 +15,21 @@ from recsys.contracts.models import (
     QueryRetrievalRequest,
     RankedItem,
     RankedList,
-    StrategyWeight,
+    SessionContext,
 )
 
 __all__ = [
-    "ContentStyle",
-    "DurationPreference",
-    "QueryIntentType",
-    "RetrievalStrategy",
     "Candidate",
     "CandidateSet",
     "CategoryMatch",
+    "ContentStyle",
+    "DurationPreference",
     "EngagementProfile",
     "QueryIntent",
+    "QueryIntentType",
     "QueryRetrievalRequest",
     "RankedItem",
     "RankedList",
-    "StrategyWeight",
+    "RetrievalSource",
+    "SessionContext",
 ]

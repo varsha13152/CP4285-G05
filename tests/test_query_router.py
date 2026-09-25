@@ -6,7 +6,6 @@ from recsys.contracts.enums import (
     ContentStyle,
     DurationPreference,
     QueryIntentType,
-    RetrievalStrategy,
 )
 from recsys.contracts.models import CategoryMatch, QueryIntent, QueryRetrievalRequest
 from recsys.routing.query_router import QueryRouter
@@ -51,15 +50,12 @@ class TestQueryRouter:
         result = router.route(intent)
         assert result.user_id is None
 
-    @pytest.mark.parametrize("intent_type", list(QueryIntentType))
-    def test_all_intent_types_have_strategies(
-        self, router: QueryRouter, intent_type: QueryIntentType,
-    ) -> None:
-        intent = _make_intent(intent_type=intent_type)
-        result = router.route(intent)
-        assert len(result.strategies) > 0
-        total_weight = sum(s.weight for s in result.strategies)
-        assert abs(total_weight - 1.0) < 0.01
+    def test_default_pool_is_100(self, router: QueryRouter) -> None:
+        assert router.route(_make_intent()).num_candidates == 100
+
+    def test_profile_passthrough(self, router: QueryRouter, sample_engagement_profile) -> None:
+        result = router.route(_make_intent(), user_id=1, engagement_profile=sample_engagement_profile)
+        assert result.engagement_profile is sample_engagement_profile
 
     def test_duration_short(self, router: QueryRouter) -> None:
         intent = _make_intent(duration=DurationPreference.SHORT)
@@ -113,21 +109,3 @@ class TestQueryRouter:
         intent = _make_intent()
         result = router.route(intent)
         assert result.num_candidates == 50
-
-    def test_learning_intent_is_content_heavy(self, router: QueryRouter) -> None:
-        intent = _make_intent(intent_type=QueryIntentType.LEARNING)
-        result = router.route(intent)
-        content_weight = next(
-            s.weight for s in result.strategies
-            if s.strategy == RetrievalStrategy.CONTENT_BASED
-        )
-        assert content_weight >= 0.5
-
-    def test_specific_search_is_content_heavy(self, router: QueryRouter) -> None:
-        intent = _make_intent(intent_type=QueryIntentType.SPECIFIC_SEARCH)
-        result = router.route(intent)
-        content_weight = next(
-            s.weight for s in result.strategies
-            if s.strategy == RetrievalStrategy.CONTENT_BASED
-        )
-        assert content_weight >= 0.7

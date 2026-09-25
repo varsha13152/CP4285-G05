@@ -7,8 +7,9 @@ is doing right now*: it sessionises the interaction history, fits a first-order
 :class:`~recsys.session_modelling.markov.MarkovSessionModel`, and exposes two
 things the rest of the pipeline consumes:
 
-* :meth:`predict_next` — the **SESSION** retrieval lane (next-item scores given
-  the current session), and a ranking feature.
+* :attr:`model` — the fitted transition table; ``UserModeller`` reads the last
+  video's transitions into ``SessionContext.next_item_scores``, a Stage 4
+  ranking feature (not a retrieval source — it ignores the search query).
 * :meth:`avg_session_length_for` — the real per-user average session length,
   which replaces the daily-intensity *proxy* on
   :attr:`EngagementProfile.avg_session_length` (see
@@ -88,8 +89,8 @@ class SessionModeller:
         k: int | None = None,
         exclude: set[int] | None = None,
     ) -> list[tuple[int, float]]:
-        """Score candidate next videos given the current session — the SESSION
-        retrieval lane. Delegates to the fitted
+        """Score candidate next videos given the current session (with
+        popularity backoff; used for offline evaluation). Delegates to the fitted
         :class:`MarkovSessionModel`."""
         return self._model.predict_next(recent_items, k=k, exclude=exclude)
 

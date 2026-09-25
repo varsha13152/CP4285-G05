@@ -1,14 +1,18 @@
 # User & Session Modelling (Stage 2)
 
-Models **who the user is** — their long-term taste — so Stage 3 can combine
-*what they asked for* (`QueryIntent`) with *who they are* (`EngagementProfile`).
+Models **who the user is** — their long-term taste — and precomputes the
+user-side lookups that **Stage 4 ranking** needs. In the query-first cascade
+(see the top-level README) Stage 3 retrieves on the query alone; everything
+personal in this profile is a *ranking* signal, never a retrieval filter.
 
 ```
-User query ──→ [Stage 1: Intent Understanding] ──→ QueryIntent
-                                                       │
-User ID ──→ [Stage 2: User Modelling (this)]  ──→ EngagementProfile
-                                                       │
-              [Stage 3: Candidate Generation]  ←───────┘ (QueryRetrievalRequest)
+User query ──→ [Stage 1: Intent Understanding] ──→ QueryIntent ─────────────┐
+User ID + recent videos ──→ [Stage 2 (this)] ──→ EngagementProfile ─────────┤
+                                                                            ▼
+                  [Router] ──→ QueryRetrievalRequest ──→ [Stage 3: retrieval, query-only]
+                                                                            │ CandidateSet
+                                                                            ▼
+                                                 [Stage 4: ranking — reads this profile]
 ```
 
 ## What this implements: `u_long`
@@ -18,8 +22,11 @@ The long-term user model is **matrix factorization** via implicit ALS
 KuaiRec's sparse `big_matrix`, using `watch_ratio` as the per-interaction
 **confidence**. Each user's learned latent factor vector is stored on
 `EngagementProfile.user_vector` and consumed downstream **purely as a ranking
-signal** — powering the personalised/collaborative candidate lane and a
-taste-alignment feature in ranking. It is never used as a hard filter.
+signal**. It is never used as a hard filter.
+
+**Verified (2026-09-25):** trained on `big_matrix`, ALS reaches Recall@100 =
+0.090 on `small_matrix` (relevant = `watch_ratio ≥ 2`) vs 0.046 for popularity.
+The default `confidence_alpha=None` (raw `watch_ratio`) beats `alpha=10` (0.041).
 
 ### Why ALS over BPR
 KuaiRec's informative signal is the graded `watch_ratio`. ALS exploits it
@@ -29,68 +36,63 @@ throw that signal away.
 ### Sparsity
 Trained **observed-only** over a `scipy` CSR matrix — no `fillna(0)`
 densification. The fully-observed `small_matrix` is intentionally **not** touched
-here; it is reserved for evaluation.
+here; it is reserved for evaluation (it shares users and videos with
+`big_matrix` but has **zero** overlapping `(user, video)` pairs).
 
 ## Usage
 
 ```python
+from recsys.session_modelling import SessionModeller
 from recsys.user_modelling import UserModeller
-from recsys.routing import QueryRouter
 
-modeller = UserModeller()                        # trains on data/raw/big_matrix.csv
-profile = modeller.build_profile(user_id=14)     # EngagementProfile w/ user_vector
-request = QueryRouter().route(intent, user_id=14, engagement_profile=profile)
+modeller = UserModeller(session_modeller=SessionModeller())    # trains on data/raw
+profile = modeller.build_session_profile(14, intent, recent_video_ids=[...])
 ```
 
 ## Output contract: `EngagementProfile`
 
-Defined in `recsys.contracts.models`. Stage 2 **produces** this object; the
-router carries it and Stage 3 / ranking **consume** it. Every field is populated
-by `build_profile`. The table gives what each field means, how it is derived,
-and how the next stage is expected to use it.
+Defined in `recsys.contracts.models`. Stage 2 **produces** it; the router and
+Stage 3 carry it; **Stage 4 consumes it**. Empty values mean *unavailable*
+(cold start / no friends / no session), not *disliked*.
 
-| Field | Meaning | Derived from | Intended use downstream |
+| Field | Meaning | Derived from | Intended use in Stage 4 |
 |-------|---------|--------------|-------------------------|
-| `user_vector` | The `u_long` ALS latent-factor row (length = `factors`) — the user's position in taste-space. **Empty** for cold-start users. | a slice of the ALS user matrix, `U[row]` | Dot with an item vector (`U[u]·V[i]`) to drive the collaborative candidate lane and a personalisation feature in ranking. It is a ranking score, **not** a probability or a predicted watch_ratio. |
-| `avg_watch_ratio` | Typical fraction of a video the user watches (`>1` = rewatches). Engagement level. | mean of the user's `watch_ratio` | Ranking feature / calibration — a finish-everything user vs a picky one. |
-| `watch_ratio_std` | Consistency of engagement (low = predictable). | sample std of `watch_ratio` (`0.0` for 1-interaction users) | Ranking feature; separates steady from erratic tastes. |
-| `total_interactions` | Volume of history — a **confidence** proxy for the whole profile. | row count | Trust weighting: how much to lean on personalisation vs popularity for thin-history users. |
-| `active_days` | Distinct days active — spread / tenure. | `nunique(date)` | Activity / trust weighting alongside `total_interactions`. |
-| `top_category_ids` | Categories ranked most→least watched (explicit taste). | count of each watched video's `feat` categories, sorted desc | Category-affinity boost; blend with the query's category filter. |
-| `category_distribution` | Normalised category shares (sums to `1.0`). | category counts ÷ total | Soft re-rank toward habitual categories; diversity control. |
-| `avg_session_length` | **Proxy**: average interactions per active day. Not a true session (no time-gap segmentation yet). | `total_interactions / active_days` | Placeholder until the session model lands; read as daily intensity, not sessions. |
-| `recency_days` | Freshness — active vs dormant. Relative to the **dataset's** last timestamp, not "today". | `(dataset_last_ts − user_last_ts) / 86400` | Freshness weighting / decay for dormant users. |
-| `seen_video_ids` | Distinct video ids the user has already interacted with. **Empty** for cold-start users. | the `video_id`s in the user's training rows | Filter already-watched items out of generated candidates (`c not in profile.seen_video_ids`). |
+| `user_vector` | ALS latent-factor row — the user's position in taste-space. **Empty** for cold start. | `U[row]` | `U[u]·V[i]` taste-alignment feature. A ranking score, not a probability. |
+| `cf_neighbour_scores` | `{video_id: Σ cosine(u, v) · watch_ratio(v, video)}` over the `k_neighbours` (50) nearest users. **Empty** for cold start. | brute-force cosine over ALS user vectors (7k × 16 ≈ 0.1 ms) + neighbours' `big_matrix` rows | the CF ranking signal (kNN users). Benchmark with vs without. |
+| `social_scores` | `{video_id: mean watch_ratio among the user's friends}`. **Empty** for the ~93% of users with no friends. | `social_network.csv` friend lists + friends' `big_matrix` rows (works for cold-start users who have friends) | friends-first social signal; fall back to the global **trending** item feature when empty. |
+| `session_context` | `SessionContext` — see below. `None` unless recent videos were given. | `build_session_profile(..., recent_video_ids)` | short-term momentum features. |
+| `seen_video_ids` | Distinct videos the user already watched. | the user's training rows | **Flag, not filter**: search users often re-find videos; Stage 3 marks `seen`, Stage 4 decides. |
+| `top_category_ids` / `category_distribution` | Habitual categories, as **caption first-level ids** (same space as Stage 1's `CategoryIndex`). | caption category of each watched video | affinity between the user's habits and a candidate's category. |
+| `avg_watch_ratio`, `watch_ratio_std` | engagement level / consistency | per-user mean / std | calibration features |
+| `total_interactions`, `active_days` | history volume — trust in personalisation | row count / `nunique(date)` | weight personal signals vs query relevance |
+| `avg_session_length` | real mean session length when a `SessionModeller` is injected; else the interactions-per-active-day proxy | `SessionModeller.avg_session_length_for` | ranking feature |
+| `recency_days` | freshness vs the **dataset's** last timestamp | `(dataset_last_ts − user_last_ts)/86400` | decay for dormant users |
 
-**Current wiring reality.** Downstream stages do **not** read these fields yet —
-`QueryRouter.route()` carries the whole `EngagementProfile` through unchanged
-inside `QueryRetrievalRequest`, and Stage 3 (retrieval) + ranking are where the
-"intended use" column takes effect once those modules exist. The field built to
-be the primary signal is `user_vector`; the rest are side-signals the same
-profile conveniently carries.
+### `SessionContext` (from `build_session_profile`)
 
-## Exports for candidate generation
+| Field | Meaning |
+|-------|---------|
+| `recent_video_ids` | the videos passed in, oldest → newest |
+| `next_item_scores` | `P(next = v \| last watched)` from the Markov table — **no popularity backoff** (popularity is its own feature). Sparse, and mostly a rewatch signal (see session_modelling). |
+| `session_vector` | mean ALS item vector of the recent videos — compare with a candidate's `item_factors` row |
+| `recent_category_ids` | caption categories of the recent videos, most recent first |
 
-One ALS fit learns *both* a user matrix `U` (`user_factors`) and an item matrix
-`V` (`item_factors`). The per-user `user_vector` = `U[row]` rides on the
-`EngagementProfile`; the item side is exposed as **global model artifacts via
-getters on the `UserModeller` instance** — they are shared across users, so they
-live on the modeller, **not** on the per-user profile.
+The query never changes the profile: a search is a temporary lens, and blending
+query relevance with these signals is Stage 4's job.
+
+## Item-side exports
+
+One ALS fit learns both `U` (users) and `V` (items). The item side is exposed on
+the `UserModeller` instance (shared across users, so not on the profile):
 
 | Export | Returns | Meaning |
 |--------|---------|---------|
-| `item_factors` | `np.ndarray` `(n_videos, factors)` | the learned item matrix `V`, the **live** array (read-only). Row `col` is the vector for `item_ids[col]`. |
-| `item_ids` | `np.ndarray` `(n_videos,)` | the `video_id` for each row of `item_factors` — decodes ANN results back to ids. |
-| `column_for_video_id(video_id)` | `int`, else `None` | row index of `video_id` in `item_factors`; `None` if it was never trained on. |
+| `item_factors` | `np.ndarray` `(n_videos, factors)` | `V` (read-only). Row `col` is `item_ids[col]`. |
+| `item_ids` | `np.ndarray` `(n_videos,)` | `video_id` per row |
+| `column_for_video_id(video_id)` | `int` or `None` | row of `video_id` in `item_factors` |
 
-Stage 3 indexes `item_factors` into an inner-product (MIPS) ANN and queries it
-with a user's `user_vector`: a large dot product `U[u]·V[i]` predicts affinity.
-`item_ids` / `column_for_video_id` are the `video_id ↔ row` bridge, so the
-mapping stays encapsulated rather than leaking through the contract. These
-factors are comparable **only within one training run** — the latent axes are
-re-randomised each fit, so vectors from different runs are not interchangeable.
-`UserModeller` stops at producing these artifacts; retrieval, scoring, ANN
-indexing and query blending are Stage 3.
+Stage 4 uses these to score `user_vector · V[i]` and `session_vector · V[i]`.
+Factors are comparable **only within one training run**.
 
 ## Knobs (`UserModeller.__init__`)
 
@@ -99,18 +101,17 @@ indexing and query blending are Stage 3.
 | `factors` | 16 | latent dimensionality `k` (try 16–32) |
 | `regularization` | 0.05 | ALS L2 |
 | `iterations` | 15 | ALS sweeps |
-| `confidence_alpha` | `None` | `None` = raw `watch_ratio`; float = `1 + α·watch_ratio` |
-| `interactions`, `item_categories` | `None` | in-memory tables (disk-free testing seam) |
+| `confidence_alpha` | `None` | `None` = raw `watch_ratio` (better on KuaiRec); float = `1 + α·watch_ratio` |
+| `k_neighbours` | 50 | users behind `cf_neighbour_scores` |
+| `session_modeller` | `None` | enables real session length + `next_item_scores` |
+| `interactions`, `item_categories`, `social_network` | `None` | in-memory tables (disk-free testing seam); from disk, categories come from the caption file |
 
 ## Deferred
 
-`build_session_profile(user_id, query_intent)` currently delegates to
-`build_profile`. The query-conditioned **session model** (the QCSAR
-differentiator — a temporary lens that does not mutate long-term preferences),
-`watch_ratio` debiasing, a BPR alternative, and a NeuMF upgrade are all future
-work.
+A BPR alternative, a NeuMF upgrade, and `watch_ratio` debiasing.
 
 ## Tests
 
-`tests/test_user_modelling.py` trains on the synthetic `sample_interactions`
-fixture (conftest) — no disk I/O, ALS fits in milliseconds.
+`tests/test_user_modelling.py` trains on the synthetic fixtures in `conftest.py`
+(no disk I/O). It covers the vector, stats, cold start, kNN-CF against a
+hand-computed single neighbour, friends' mean scores and session context.

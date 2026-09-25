@@ -7,7 +7,7 @@ from recsys.contracts.enums import (
     ContentStyle,
     DurationPreference,
     QueryIntentType,
-    RetrievalStrategy,
+    RetrievalSource,
 )
 from recsys.contracts.models import (
     Candidate,
@@ -18,7 +18,6 @@ from recsys.contracts.models import (
     QueryRetrievalRequest,
     RankedItem,
     RankedList,
-    StrategyWeight,
 )
 
 
@@ -92,10 +91,6 @@ def sample_retrieval_request(sample_query_intent):
     return QueryRetrievalRequest(
         query_intent=sample_query_intent,
         user_id=1,
-        strategies=[
-            StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.6),
-            StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.4),
-        ],
         num_candidates=50,
         category_filter=[12, 9],
     )
@@ -104,11 +99,11 @@ def sample_retrieval_request(sample_query_intent):
 @pytest.fixture
 def sample_candidate_set(sample_retrieval_request):
     candidates = [
-        Candidate(video_id=10, score=0.9, source_strategy=RetrievalStrategy.CONTENT_BASED,
+        Candidate(video_id=10, score=0.9, source=RetrievalSource.BOTH,
                   category_ids=[1, 5]),
-        Candidate(video_id=20, score=0.7, source_strategy=RetrievalStrategy.COLLABORATIVE,
+        Candidate(video_id=20, score=0.7, source=RetrievalSource.SEMANTIC,
                   category_ids=[2, 5]),
-        Candidate(video_id=30, score=0.5, source_strategy=RetrievalStrategy.CONTENT_BASED,
+        Candidate(video_id=30, score=0.5, source=RetrievalSource.BOTH,
                   category_ids=[1, 3]),
     ]
     return CandidateSet(
@@ -122,11 +117,11 @@ def sample_candidate_set(sample_retrieval_request):
 def sample_ranked_list():
     items = [
         RankedItem(video_id=10, rank=1, score=0.95,
-                   source_strategy=RetrievalStrategy.CONTENT_BASED, category_ids=[1, 5]),
+                   source=RetrievalSource.BOTH, category_ids=[1, 5]),
         RankedItem(video_id=20, rank=2, score=0.80,
-                   source_strategy=RetrievalStrategy.COLLABORATIVE, category_ids=[2, 5]),
+                   source=RetrievalSource.SEMANTIC, category_ids=[2, 5]),
         RankedItem(video_id=30, rank=3, score=0.60,
-                   source_strategy=RetrievalStrategy.CONTENT_BASED, category_ids=[1, 3]),
+                   source=RetrievalSource.BOTH, category_ids=[1, 3]),
     ]
     return RankedList(
         user_id=1,

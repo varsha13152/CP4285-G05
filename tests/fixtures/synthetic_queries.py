@@ -97,28 +97,9 @@ SYNTHETIC_QUERIES: list[dict] = [
         "expected_duration": "SHORT",
         "expected_intent": "INSPIRATION",
     },
-    # --- Vague / ambiguous queries ---
-    {
-        "query": "something funny to watch",
-        "expected_topics": [9],           # 喜剧 (Comedy) — most likely
-        "expected_style": "FUNNY",
-        "expected_duration": "ANY",
-        "expected_intent": "ENTERTAINMENT",
-    },
-    {
-        "query": "show me something new",
-        "expected_topics": [],            # No specific category
-        "expected_style": "NEUTRAL",
-        "expected_duration": "ANY",
-        "expected_intent": "EXPLORATION",
-    },
-    {
-        "query": "what's popular right now",
-        "expected_topics": [],
-        "expected_style": "NEUTRAL",
-        "expected_duration": "ANY",
-        "expected_intent": "SOCIAL",
-    },
+    # Vague queries ("something funny to watch", "show me something new",
+    # "what's popular right now") were removed: the pipeline is for specific
+    # searches; open-ended browsing belongs to the main-page recommender.
     # --- Negation queries ---
     {
         "query": "comedy but not slapstick, keep it short",

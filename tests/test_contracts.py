@@ -1,12 +1,9 @@
 """Tests for contract dataclasses — verify they construct correctly."""
 
-from recsys.contracts.enums import QueryIntentType, RetrievalStrategy
+from recsys.contracts.enums import QueryIntentType
 from recsys.contracts.models import (
     CategoryMatch,
-    EngagementProfile,
-    QueryIntent,
     QueryRetrievalRequest,
-    StrategyWeight,
 )
 
 
@@ -27,18 +24,17 @@ def test_query_intent_creation(sample_query_intent):
 
 
 def test_retrieval_request_defaults(sample_query_intent):
-    req = QueryRetrievalRequest(
-        query_intent=sample_query_intent,
-        strategies=[StrategyWeight(RetrievalStrategy.POPULARITY, 1.0)],
-    )
+    req = QueryRetrievalRequest(query_intent=sample_query_intent)
     assert req.num_candidates == 100
     assert req.category_filter is None
     assert req.user_id is None
 
 
-def test_strategy_weight_sum(sample_retrieval_request):
-    total = sum(sw.weight for sw in sample_retrieval_request.strategies)
-    assert abs(total - 1.0) < 0.01
+def test_profile_context_defaults_are_empty(sample_engagement_profile):
+    # Cold-start / no-context users: empty means "unavailable", not "disliked".
+    p = sample_engagement_profile
+    assert p.session_context is None
+    assert p.social_scores == {} and p.cf_neighbour_scores == {}
 
 
 def test_category_match_fields():

@@ -37,11 +37,13 @@ class DurationPreference(Enum):
     ANY = auto()        # No preference
 
 
-class RetrievalStrategy(Enum):
-    """Available candidate retrieval strategies."""
+class RetrievalSource(Enum):
+    """How Stage 3 found a candidate (the query-first cascade has no lanes).
 
-    COLLABORATIVE = auto()
-    CONTENT_BASED = auto()
-    POPULARITY = auto()
-    SOCIAL = auto()
-    SESSION = auto()  # short-term in-session next-item lane (see session_modelling)
+    Personalisation (CF, session, social, popularity) is a Stage 4 ranking
+    concern, so every candidate comes from query relevance alone.
+    """
+
+    SEMANTIC = auto()  # caption embedding matched the query embedding
+    CATEGORY = auto()  # caption category matched a query topic; video has no text
+    BOTH = auto()      # category match and the video has text for semantic scoring

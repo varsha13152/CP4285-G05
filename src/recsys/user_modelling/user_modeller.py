@@ -3,8 +3,17 @@
 Trains an implicit-feedback ALS model over KuaiRec's sparse ``big_matrix``,
 feeding ``watch_ratio`` as the per-interaction *confidence*. Each user's learned
 latent factor vector is exposed on ``EngagementProfile.user_vector`` and consumed
-downstream purely as a ranking signal (the personalised/collaborative candidate
-lane and a taste-alignment feature in ranking), never as a hard filter.
+downstream purely as a Stage 4 ranking signal, never as a retrieval filter.
+
+In the query-first cascade, Stage 2 also precomputes the candidate-independent
+lookups Stage 4 needs, so ranking is a dict lookup per candidate:
+
+* ``cf_neighbour_scores`` — kNN users (cosine over ALS user vectors) and a
+  ``{video_id: Σ sim · watch_ratio}`` over their history.
+* ``social_scores`` — ``{video_id: mean watch_ratio among the user's friends}``
+  (only ~6.6% of KuaiRec users have friends; empty otherwise).
+* ``session_context`` — built by :meth:`build_session_profile` from the user's
+  recent videos.
 
 Design notes
 ------------
@@ -16,8 +25,8 @@ Design notes
 * **Confidence transform** (open knob) — ``confidence_alpha=None`` uses the raw
   ``watch_ratio`` as confidence (the default); a float applies
   ``1 + confidence_alpha * watch_ratio``.
-* **Session model** (``build_session_profile``) is deferred and currently
-  delegates to :meth:`build_profile`.
+* **Categories** are caption first-level ids (``CategoryIndex``), matching
+  Stage 1's query topics — not the ``feat`` tags of ``item_categories.csv``.
 
 Usage::
 
@@ -37,7 +46,8 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 
-from recsys.contracts.models import EngagementProfile, QueryIntent
+from recsys.contracts.models import EngagementProfile, QueryIntent, SessionContext
+from recsys.data.item_features import caption_category_table
 from recsys.data.loader import load_kuairec
 
 if TYPE_CHECKING:
@@ -73,16 +83,25 @@ class UserModeller:
         ``timestamp`` columns. Used by unit tests to avoid disk I/O.
     item_categories : pandas.DataFrame | None
         ``video_id`` → ``feat`` (list of category ids) table used for the
-        category statistics. When ``None`` and loading from disk, the loader's
-        ``item_categories`` is used; when ``None`` with in-memory
-        *interactions*, category stats are left empty (a valid stub).
+        category statistics. When ``None`` and loading from disk, it is built
+        from the caption file's first-level ids
+        (:func:`~recsys.data.item_features.caption_category_table`); when
+        ``None`` with in-memory *interactions*, category stats are left empty
+        (a valid stub).
     show_progress : bool
         Whether the ALS fit prints a progress bar.
     session_modeller : SessionModeller | None
         Optional short-term session model (``recsys.session_modelling``). When
-        set, :meth:`build_session_profile` replaces the ``avg_session_length``
-        proxy with its real per-user value (and, later, will blend its next-item
-        scores). ``None`` keeps the long-term-only behaviour.
+        set, :meth:`build_session_profile` uses the real ``avg_session_length``
+        and fills ``session_context.next_item_scores``. ``None`` keeps the
+        long-term-only behaviour.
+    social_network : pandas.DataFrame | None
+        ``user_id`` → ``friend_list`` table for ``social_scores``. When ``None``
+        and loading from disk, the loader's ``social_network`` is used; when
+        ``None`` with in-memory *interactions*, ``social_scores`` stay empty.
+    k_neighbours : int
+        Number of nearest users (cosine over ALS user vectors) behind
+        ``cf_neighbour_scores``.
     """
 
     def __init__(
@@ -97,6 +116,8 @@ class UserModeller:
         item_categories: pd.DataFrame | None = None,
         show_progress: bool = False,
         session_modeller: SessionModeller | None = None,
+        social_network: pd.DataFrame | None = None,
+        k_neighbours: int = 50,
     ) -> None:
         # Lazy import so importing the package does not hard-require `implicit`
         # unless a model is actually trained.
@@ -104,6 +125,7 @@ class UserModeller:
 
         self.factors = factors
         self._session_modeller = session_modeller
+        self._k_neighbours = k_neighbours
 
         if interactions is None:
             data = load_kuairec(data_dir, load_big=True)
@@ -111,7 +133,9 @@ class UserModeller:
             if interactions is None:  # pragma: no cover - defensive
                 raise RuntimeError("load_kuairec did not return big_matrix")
             if item_categories is None:
-                item_categories = data.item_categories
+                item_categories = caption_category_table(data.caption_categories)
+            if social_network is None:
+                social_network = data.social_network
 
         self._interactions = interactions
 
@@ -157,6 +181,20 @@ class UserModeller:
         self._video_ids = interactions["video_id"].to_numpy()
         self._vid_to_feats = self._build_category_lookup(item_categories)
 
+        # --- Stage 4 lookups: kNN-CF and social -----------------------------
+        self._watch = interactions["watch_ratio"].to_numpy(dtype=np.float64)
+        self._video_cols = cols  # item_factors column per interaction row
+        self._row_to_user = unique_users
+        norms = np.linalg.norm(self._user_factors, axis=1, keepdims=True)
+        self._unit_users = self._user_factors / np.where(norms == 0, 1.0, norms)
+        self._friends: dict[int, list[int]] = {}
+        if social_network is not None and "friend_list" in social_network.columns:
+            self._friends = {
+                int(u): [int(f) for f in fl]
+                for u, fl in zip(social_network["user_id"], social_network["friend_list"])
+                if len(fl)
+            }
+
     # ------------------------------------------------------------------
     # construction helpers
     # ------------------------------------------------------------------
@@ -199,7 +237,10 @@ class UserModeller:
         user_id = int(user_id)
         row = self._user_to_row.get(user_id)
         if row is None:
-            return self._cold_start_profile(user_id)
+            profile = self._cold_start_profile(user_id)
+            # Social needs only the friends' history, so it survives cold start.
+            profile.social_scores = self._social_scores(user_id)
+            return profile
 
         rec = self._stats[user_id]
         top_category_ids, category_distribution = self._category_stats(user_id)
@@ -224,24 +265,33 @@ class UserModeller:
             recency_days=recency_days,
             user_vector=self._user_factors[row].tolist(),
             seen_video_ids=self._seen_video_ids(user_id),
+            social_scores=self._social_scores(user_id),
+            cf_neighbour_scores=self._cf_neighbour_scores(row),
         )
 
     def build_session_profile(
-        self, user_id: int, query_intent: QueryIntent
+        self,
+        user_id: int,
+        query_intent: QueryIntent,
+        recent_video_ids: list[int] | None = None,
     ) -> EngagementProfile:
-        """Session-aware profile: the long-term profile with its
-        ``avg_session_length`` proxy replaced by the **real** per-user session
-        length from the injected :class:`SessionModeller`.
+        """Long-term profile plus the user's short-term context.
 
-        With no session model (``session_modeller=None``) this falls back to
-        :meth:`build_profile` unchanged. The query-conditioned session *blend*
-        (the QCSAR differentiator — folding ``query_intent`` and the session
-        next-item scores into the profile) is still deferred; only the
-        session-length signal is wired in so far.
+        * ``avg_session_length`` — the real per-user value from the injected
+          :class:`SessionModeller` (replaces the daily-intensity proxy).
+        * ``session_context`` — built from *recent_video_ids* (oldest → newest)
+          when given; ``None`` otherwise.
+
+        The query does not alter the profile: blending the query with the
+        user's taste is Stage 4's job (query relevance stays a ranking
+        feature), so the long-term profile is never mutated by a search.
+        *query_intent* is accepted for the pipeline contract.
         """
         profile = self.build_profile(user_id)
         if self._session_modeller is not None:
             profile.avg_session_length = self._session_modeller.avg_session_length_for(user_id)
+        if recent_video_ids:
+            profile.session_context = self._session_context(list(recent_video_ids))
         return profile
 
     # ------------------------------------------------------------------
@@ -295,6 +345,71 @@ class UserModeller:
         if idx is None:
             return set()
         return {int(v) for v in self._video_ids[idx]}
+
+    def _cf_neighbour_scores(self, row: int) -> dict[int, float]:
+        """``{video_id: Σ cosine(u, v) · watch_ratio(v, video)}`` over the
+        user's ``k_neighbours`` nearest users with positive similarity."""
+        # ponytail: exact brute-force kNN (7k users × 16 dims ≈ 0.1 ms); an ANN
+        # index only pays off at ~100× the users.
+        sims = self._unit_users @ self._unit_users[row]
+        sims[row] = -np.inf  # never your own neighbour
+        k = min(self._k_neighbours, len(sims) - 1)
+        if k <= 0:
+            return {}
+        top = np.argpartition(-sims, k - 1)[:k]
+        top = top[sims[top] > 0]
+        if not len(top):
+            return {}
+        idx_parts, weight_parts = [], []
+        for nrow in top:
+            idx = self._user_indices[int(self._row_to_user[nrow])]
+            idx_parts.append(idx)
+            weight_parts.append(np.full(len(idx), sims[nrow]))
+        idx = np.concatenate(idx_parts)
+        scores = np.bincount(
+            self._video_cols[idx],
+            weights=np.concatenate(weight_parts) * self._watch[idx],
+            minlength=len(self._col_to_video),
+        )
+        nz = np.flatnonzero(scores)
+        return {int(self._col_to_video[c]): float(scores[c]) for c in nz}
+
+    def _social_scores(self, user_id: int) -> dict[int, float]:
+        """``{video_id: mean watch_ratio among the user's friends}``."""
+        idx = [
+            self._user_indices[f] for f in self._friends.get(int(user_id), ())
+            if f in self._user_indices
+        ]
+        if not idx:
+            return {}
+        idx = np.concatenate(idx)
+        means = (
+            pd.Series(self._watch[idx]).groupby(self._video_ids[idx]).mean()
+        )
+        return {int(v): float(s) for v, s in means.items()}
+
+    def _session_context(self, recent: list[int]) -> SessionContext:
+        """Short-term lookups from the user's recent videos (oldest → newest)."""
+        next_scores: dict[int, float] = {}
+        if self._session_modeller is not None:
+            # Raw transitions for the last video only — no popularity backoff,
+            # since popularity is already its own Stage 4 feature.
+            next_scores = dict(self._session_modeller.model.transitions_for(recent[-1]))
+        cols = [c for c in (self.column_for_video_id(v) for v in recent) if c is not None]
+        session_vector = (
+            self._item_factors[cols].mean(axis=0).tolist() if cols else []
+        )
+        recent_cats: list[int] = []
+        for vid in reversed(recent):  # most recent first, de-duplicated
+            for cat in self._vid_to_feats.get(int(vid), ()):
+                if cat not in recent_cats:
+                    recent_cats.append(cat)
+        return SessionContext(
+            recent_video_ids=recent,
+            next_item_scores=next_scores,
+            session_vector=session_vector,
+            recent_category_ids=recent_cats,
+        )
 
     @staticmethod
     def _cold_start_profile(user_id: int) -> EngagementProfile:

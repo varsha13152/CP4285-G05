@@ -1,79 +1,32 @@
 """Query-conditioned routing for the QCSAR pipeline.
 
-Maps a ``QueryIntent`` to a ``QueryRetrievalRequest``, selecting retrieval
-strategies and filters based on the parsed query rather than user behavior.
+Maps a ``QueryIntent`` to a ``QueryRetrievalRequest``: which query topics feed
+the category retrieval source, the soft duration target, and the candidate
+pool size. In the query-first cascade there are no retrieval lanes to weight —
+personalisation happens in Stage 4 ranking — so routing is purely about what
+the query asked for.
 
 Usage::
 
     from recsys.routing import QueryRouter
 
     router = QueryRouter()
-    request = router.route(query_intent, user_id=14)
+    request = router.route(query_intent, user_id=14, engagement_profile=profile)
 """
 
 from __future__ import annotations
 
-from recsys.contracts.enums import (
-    DurationPreference,
-    QueryIntentType,
-    RetrievalStrategy,
-)
+from recsys.contracts.enums import DurationPreference
 from recsys.contracts.models import (
     EngagementProfile,
     QueryIntent,
     QueryRetrievalRequest,
-    StrategyWeight,
 )
 
 # ---------------------------------------------------------------------------
-# Strategy weights per query intent type
-# ---------------------------------------------------------------------------
-
-# SESSION is the short-term in-session next-item lane (session_modelling):
-# weighted high for open-ended browsing (EXPLORATION / ENTERTAINMENT), low for
-# goal-directed lookups (SPECIFIC_SEARCH / LEARNING). Each list sums to ~1.0.
-_STRATEGY_MAP: dict[QueryIntentType, list[StrategyWeight]] = {
-    QueryIntentType.ENTERTAINMENT: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.3),
-        StrategyWeight(RetrievalStrategy.SESSION, 0.3),
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.2),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
-    ],
-    QueryIntentType.LEARNING: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.6),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.1),
-        StrategyWeight(RetrievalStrategy.SESSION, 0.1),
-    ],
-    QueryIntentType.SPECIFIC_SEARCH: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.7),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.1),
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.1),
-        StrategyWeight(RetrievalStrategy.SESSION, 0.1),
-    ],
-    QueryIntentType.SOCIAL: [
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.4),
-        StrategyWeight(RetrievalStrategy.SOCIAL, 0.3),
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.2),
-        StrategyWeight(RetrievalStrategy.SESSION, 0.1),
-    ],
-    QueryIntentType.EXPLORATION: [
-        StrategyWeight(RetrievalStrategy.SESSION, 0.3),
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.2),
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.2),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.15),
-        StrategyWeight(RetrievalStrategy.SOCIAL, 0.15),
-    ],
-    QueryIntentType.INSPIRATION: [
-        StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.4),
-        StrategyWeight(RetrievalStrategy.POPULARITY, 0.3),
-        StrategyWeight(RetrievalStrategy.SESSION, 0.2),
-        StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.1),
-    ],
-}
-
-# ---------------------------------------------------------------------------
 # Duration → millisecond ranges (from item_daily_features.csv stats)
+# KuaiRec durations: SHORT 85% / MEDIUM 14% / LONG 1.1% of videos, which is
+# why Stage 3 treats this range as a soft target rather than a filter.
 # ---------------------------------------------------------------------------
 
 _DURATION_RANGES: dict[DurationPreference, tuple[int, int] | None] = {
@@ -83,17 +36,6 @@ _DURATION_RANGES: dict[DurationPreference, tuple[int, int] | None] = {
     DurationPreference.ANY: None,
 }
 
-# ---------------------------------------------------------------------------
-# Default fallback strategies
-# ---------------------------------------------------------------------------
-
-_FALLBACK_STRATEGIES: list[StrategyWeight] = [
-    StrategyWeight(RetrievalStrategy.POPULARITY, 0.4),
-    StrategyWeight(RetrievalStrategy.CONTENT_BASED, 0.3),
-    StrategyWeight(RetrievalStrategy.COLLABORATIVE, 0.2),
-    StrategyWeight(RetrievalStrategy.SOCIAL, 0.1),
-]
-
 
 class QueryRouter:
     """Route a ``QueryIntent`` into a ``QueryRetrievalRequest``.
@@ -101,10 +43,10 @@ class QueryRouter:
     Parameters
     ----------
     default_num_candidates : int
-        Number of candidates to request from retrieval.
+        Number of candidates Stage 3 hands to Stage 4 (default 100).
     min_category_confidence : float
-        Only include topics with confidence at or above this threshold
-        in the hard category filter.
+        Only topics with confidence at or above this threshold feed the
+        category retrieval source.
     """
 
     def __init__(
@@ -122,29 +64,18 @@ class QueryRouter:
         engagement_profile: EngagementProfile | None = None,
     ) -> QueryRetrievalRequest:
         """Map a parsed query intent to retrieval parameters."""
-        # Strategy weights
-        strategies = _STRATEGY_MAP.get(
-            query_intent.intent_type, _FALLBACK_STRATEGIES,
-        )
-
-        # Duration range
-        duration_range = _DURATION_RANGES.get(query_intent.duration)
-
-        # Category filter — only high-confidence topic matches
         confident_topics = [
             t.category_id
             for t in query_intent.topics
             if t.confidence >= self._min_confidence
         ]
-        category_filter = confident_topics if confident_topics else None
 
         return QueryRetrievalRequest(
             query_intent=query_intent,
             user_id=user_id,
             engagement_profile=engagement_profile,
-            strategies=strategies,
             num_candidates=self._num_candidates,
-            category_filter=category_filter,
-            duration_range_ms=duration_range,
+            category_filter=confident_topics or None,
+            duration_range_ms=_DURATION_RANGES.get(query_intent.duration),
             min_category_confidence=self._min_confidence,
         )

@@ -176,3 +176,60 @@ def test_seen_video_ids_on_profile(modeller):
 
 def test_seen_video_ids_empty_for_unknown_user(modeller):
     assert modeller.build_profile(99999).seen_video_ids == set()
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 lookups: kNN-CF, social, session context
+# ---------------------------------------------------------------------------
+
+def test_cf_neighbour_scores_match_single_neighbour(sample_interactions):
+    import numpy as np
+
+    m = UserModeller(interactions=sample_interactions, factors=FACTORS, iterations=5,
+                     k_neighbours=1)
+    u = m._unit_users
+    sims = u @ u[0]  # user 1 is row 0
+    sims[0] = -np.inf
+    best = int(np.argmax(sims))
+    got = m.build_profile(1).cf_neighbour_scores
+    if sims[best] <= 0:
+        assert got == {}
+        return
+    rows = sample_interactions[sample_interactions.user_id == int(m._row_to_user[best])]
+    expected = {int(v): sims[best] * w for v, w in zip(rows.video_id, rows.watch_ratio)}
+    assert got.keys() == expected.keys()
+    for vid, score in expected.items():
+        assert got[vid] == pytest.approx(score)
+
+
+def test_cf_neighbour_scores_empty_for_cold_start(modeller):
+    assert modeller.build_profile(99999).cf_neighbour_scores == {}
+
+
+def test_social_scores_are_friends_mean_watch_ratio(sample_interactions, sample_social_network):
+    m = UserModeller(interactions=sample_interactions, factors=FACTORS, iterations=3,
+                     social_network=sample_social_network)
+    # user 1's friends are users 2 and 3, who watched disjoint videos
+    assert m.build_profile(1).social_scores == pytest.approx(
+        {10: 0.8, 40: 0.3, 50: 0.95, 20: 0.2, 30: 0.4, 60: 0.1}
+    )
+    assert m.build_profile(99999).social_scores == {}  # no friends -> unavailable
+
+
+def test_session_context_from_recent_videos(
+    sample_interactions, sample_item_categories, sample_query_intent
+):
+    from recsys.session_modelling import SessionModeller
+
+    m = UserModeller(interactions=sample_interactions, item_categories=sample_item_categories,
+                     factors=FACTORS, iterations=3,
+                     session_modeller=SessionModeller(interactions=sample_interactions))
+    ctx = m.build_session_profile(1, sample_query_intent, recent_video_ids=[10, 20]).session_context
+    assert ctx.recent_video_ids == [10, 20]
+    assert ctx.next_item_scores == {30: 1.0}          # 20 -> 30 in both sessions that contain 20
+    assert len(ctx.session_vector) == FACTORS
+    assert ctx.recent_category_ids == [2, 5, 1]       # most recent video's categories first
+
+
+def test_session_context_absent_without_recent_videos(modeller, sample_query_intent):
+    assert modeller.build_session_profile(1, sample_query_intent).session_context is None

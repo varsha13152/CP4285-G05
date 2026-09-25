@@ -1,10 +1,17 @@
 # Session Modelling (Stage 2 — short-term)
 
-Models **what the user is doing right now** — their in-session momentum — so
-Stage 3 can blend the immediate next-item signal with the long-term taste vector
-from `u_long`. Companion to [`user_modelling`](../user_modelling/README.md) (the
-long-term `u_long` ALS model): this is the short-term signal that sits *under*
-`u_long`, never overwriting it.
+Models **what the user is doing right now** — their in-session momentum — as
+**ranking features for Stage 4**. Companion to
+[`user_modelling`](../user_modelling/README.md) (the long-term `u_long` ALS
+model): this is the short-term signal that sits *under* `u_long`, never
+overwriting it.
+
+In the query-first cascade (top-level README) the session model does **not**
+generate candidates: "next video after the last one watched" ignores the search
+query, so as a retrieval lane it would pull off-topic videos into a search.
+Instead `UserModeller.build_session_profile` packs its output into
+`EngagementProfile.session_context`, and Stage 4 uses it to re-order the
+query-relevant candidates.
 
 ```
 User's timeline ──→ [Sessioniser] ──→ ordered per-session sequences
@@ -12,7 +19,9 @@ User's timeline ──→ [Sessioniser] ──→ ordered per-session sequences
                                               ▼
                        [MarkovSessionModel] ──→ next-item scores
                                               │
-                [Stage 3: Candidate Generation] ←──┘ (SESSION lane)
+     [UserModeller.build_session_profile] ←───┘ → EngagementProfile.session_context
+                                              │
+                         [Stage 4: ranking]  ←┘ (feature, not candidates)
 ```
 
 ## What this implements
@@ -86,7 +95,7 @@ model **on construction**, then exposes what the next stage needs:
 from recsys.session_modelling import SessionModeller
 
 sm = SessionModeller(strategy="fixed")             # trains on data/raw/big_matrix.csv
-sm.predict_next(current_session_video_ids, k=10)   # SESSION candidates: [(video_id, score), ...]
+sm.predict_next(current_session_video_ids, k=10)   # next-video scores: [(video_id, score), ...]
 sm.avg_session_length_for(user_id)                 # real avg session length (a ranking feature)
 ```
 
@@ -102,27 +111,17 @@ model = MarkovSessionModel().fit(sequences)
 
 ## What's exposed & how the next stage uses it
 
-Stage 3 (candidate generation) blends several *lanes*; this module owns the
-**SESSION** lane. What it hands over:
-
-| Exposed | Returns | How the next stage uses it |
-|---------|---------|----------------------------|
-| `SessionModeller.predict_next(recent, k)` | ranked `[(video_id, score), …]` | the SESSION candidate list for the user's current session |
-| `SessionModeller.avg_session_length_for(user_id)` | `float` | real `EngagementProfile.avg_session_length` (a ranking feature, not candidates) |
-| `RetrievalStrategy.SESSION` + its router weight | enum + weight inside `QueryRetrievalRequest.strategies` | how much to trust the SESSION lane per query intent (high for browsing, low for search) |
+| Exposed | Returns | How it is used |
+|---------|---------|----------------|
+| `SessionModeller.model.transitions_for(last)` | `[(video_id, prob), …]` (no popularity backoff) | `SessionContext.next_item_scores` — a Stage 4 feature, looked up per candidate |
+| `SessionModeller.avg_session_length_for(user_id)` | `float` | real `EngagementProfile.avg_session_length` (ranking feature) |
+| `SessionModeller.predict_next(recent, k)` | ranked list with popularity backoff | offline evaluation; not used in the search pipeline |
 | `Sessioniser.to_sequences()` | ordered id lists | training input for GRU4Rec later |
 
-**No ANN for this lane.** `u_long` produces dense vectors, so it needs a MIPS/ANN
-index over `item_factors` to search them. The session model is a `dict[item →
-ranked next-items]`: candidate generation is a **hash lookup on the last watched
-video that is already sorted** — the fitted table *is* the index. Stage 3 just
-calls `predict_next(...)`; there is nothing extra to build.
-
-**Not wired end-to-end yet.** No retriever consumes `RetrievalStrategy.SESSION`
-— the weight rides in `QueryRetrievalRequest.strategies` awaiting a Stage 3 that
-doesn't exist. `UserModeller.build_session_profile` already swaps in the real
-`avg_session_length`, but folding the session next-item scores into the profile
-as a query-time lens is still deferred.
+The fitted transition table is a `dict[item → ranked next-items]`, so Stage 4
+gets the feature with a hash lookup; no index is needed. (The earlier
+`RetrievalStrategy.SESSION` lane and its router weights were removed with the
+move to the query-first cascade — see the change log in the top-level README.)
 
 ## Knobs (`Sessioniser.__init__`)
 
@@ -165,6 +164,23 @@ ordering, 0.098 vs 0.048). For an apples-to-apples comparison of **all three**
 strategies on one **shared** test set, see the ablation (`--ablation` /
 `split_by_timestamp`) below.
 
+### Rewatches and the popularity baseline (added 2026-09-25)
+
+10.1% of the `fixed` test steps are the **same video watched again**
+consecutively. A first-order model learns `i → i` and predicts those at rank 1,
+which is why MRR@10 (0.096) almost equals HR@10 (0.106). With rewatches
+collapsed (`--collapse-repeats`), and against a context-free popularity
+baseline fitted on the same train sessions (full data, `fixed` 30 min):
+
+| Model | HR@10 raw | HR@10 rewatches collapsed | HR@20 collapsed |
+|-------|-----------|---------------------------|-----------------|
+| Markov | 0.1056 | **0.0140** | 0.0239 |
+| Popularity | 0.0076 | 0.0069 | 0.0075 |
+
+**Verdict:** the Markov table carries real but weak signal beyond rewatches (~2×
+popularity). In search it is therefore a Stage 4 feature, not a candidate
+source. Report the collapsed number alongside the raw one from now on.
+
 ### Ablation — does sessionisation help? (fair, shared test set)
 
 `--ablation` (`split_by_timestamp`) puts all three strategies on **one shared
@@ -199,7 +215,10 @@ single-threaded pandas:
 ```bash
 python scripts/evaluate_session_baseline.py              # main eval (by-session split)
 python scripts/evaluate_session_baseline.py --ablation   # fair shared-test-set ablation
+python scripts/evaluate_session_baseline.py --collapse-repeats  # rewatches not scored
 ```
+
+Every run also prints a `(popularity)` row per strategy.
 
 Runtime (fit + eval **per strategy**; excludes the one-time ~1 GB CSV load of
 ~0.5–1 min):
@@ -214,20 +233,18 @@ subset (e.g. `--sample-users 2000` ≈ 15–35 s/strategy).
 
 ## Deferred
 
-* **Query-conditioned blend** — `build_session_profile` swaps in the real session
-  length but does not yet fold the session next-item scores into the profile as a
-  query-time lens.
-* **Stage 3 consumption** — a retriever that actually reads the SESSION lane.
-* **GRU4Rec / SASRec** — the neural sequence *models to beat*.
+* **Stage 4 consumption** — a ranker that reads `session_context`.
+* **GRU4Rec / SASRec** — the neural sequence *models to beat* (beat the
+  rewatch-collapsed number, not the raw one).
 * **Per-user tuning** — sweeping `gap_minutes` / `pct` against downstream accuracy.
 * **MRR / NDCG reporting** — computed already; not featured while HR is the headline.
 
-*Done in Phase 2:* `SessionModeller`, `RetrievalStrategy.SESSION` + router weights,
-and the real `avg_session_length` in `build_session_profile`.
+*Done:* `SessionModeller`; real `avg_session_length` and `session_context` in
+`build_session_profile`; rewatch-collapsed evaluation + popularity baseline.
 
 ## Tests
 
 `tests/test_sessioniser.py` + `tests/test_session_markov.py` cover the three
 strategies, boundary rules, sequence extraction, session stats, transition
-counting, popularity backoff, and `exclude`. Pure in-memory DataFrames — no disk
-I/O.
+counting, popularity backoff, `exclude`, rewatch collapsing and the popularity
+baseline. Pure in-memory DataFrames — no disk I/O.

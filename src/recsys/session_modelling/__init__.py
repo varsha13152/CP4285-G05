@@ -5,8 +5,9 @@
 * :class:`MarkovSessionModel` learns within-session ``(item -> next-item)``
   transitions and scores candidate next videos for the current session.
 * :class:`SessionModeller` trains both on construction and exposes the pieces the
-  pipeline consumes — ``predict_next`` (the SESSION retrieval lane) and the real
-  per-user ``avg_session_length`` for ``EngagementProfile``.
+  pipeline consumes — next-item transitions (a Stage 4 ranking feature, via
+  ``EngagementProfile.session_context``) and the real per-user
+  ``avg_session_length``.
 
 Companion to :mod:`recsys.user_modelling` (the long-term ``u_long`` model): this
 is the short-term, in-session signal that sits *under* ``u_long``, never

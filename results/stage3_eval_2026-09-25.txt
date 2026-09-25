@@ -1,0 +1,12 @@
+Stage 3 retrieval benchmark — 2026-09-25
+27 synthetic queries, N=100, intents: gold intents + live bge-m3 embedding
+weights: {'w_sem': 1.0, 'w_cat': 0.5, 'w_dur': 0.2}
+catalogue: 10,728 videos (9,739 with text); small_matrix subset 3,327
+
+    mode  hit_rate@100  small_recall@100  retrieval_ms
+semantic        0.2330            0.1731          2.43
+category        1.0000            0.8496          1.48
+  hybrid        0.8641            0.8350          2.47
+
+query embedding latency: mean 574 ms (API call, dominates retrieval compute)
+caveat: labels come from category ids, which favours the category mode.
