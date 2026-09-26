@@ -17,6 +17,12 @@ true next item), reported at cut-offs ``k``:
 ``precision@k`` is *not* reported: with one relevant item it is capped at
 ``1/k`` and carries no extra signal over HR@k.
 
+**Rewatches.** ~10% of KuaiRec test steps are the same video watched again
+consecutively; a first-order model predicts those almost perfectly, which
+inflates HR (0.106 → 0.014 for ``fixed`` 30 min on full data once collapsed).
+Report with ``collapse_repeats=True`` alongside the raw number, and compare
+against :class:`PopularityBaseline`.
+
 These are the next-item specialisation of :mod:`recsys.evaluation.metrics`
 (which operates on full-pipeline ``RankedList`` objects); computed directly here
 for speed over many test steps.
@@ -110,18 +116,37 @@ def split_by_timestamp(
     return train_df, test_sequences
 
 
+class PopularityBaseline:
+    """Context-free baseline: ignores the session and returns the fitted
+    model's global popularity ranking (its own backoff for an empty session)."""
+
+    def __init__(self, model: MarkovSessionModel) -> None:
+        self._model = model
+
+    def predict_next(self, recent_items, k=None, exclude=None):
+        return self._model.predict_next([], k=k, exclude=exclude)
+
+
 def evaluate_next_item(
-    model: MarkovSessionModel,
+    model: MarkovSessionModel | PopularityBaseline,
     test_sequences: list[list[int]],
     ks: tuple[int, ...] = (10, 20),
     exclude_seen: bool = False,
+    collapse_repeats: bool = False,
 ) -> dict[str, float]:
     """Average HR@k / MRR@k / NDCG@k over every ``(context, target)`` step of
     every test session.
 
     For each session ``[i0, i1, ...]`` and each position ``t >= 1``, the context
-    is ``i[t-1]`` (first-order) and the target is ``i[t]``.
+    is ``i[t-1]`` (first-order) and the target is ``i[t]``. With
+    ``collapse_repeats`` consecutive duplicates (rewatches) are merged first, so
+    "predict the same video again" no longer counts as a hit.
     """
+    if collapse_repeats:
+        test_sequences = [
+            [v for t, v in enumerate(seq) if t == 0 or v != seq[t - 1]]
+            for seq in test_sequences
+        ]
     max_k = max(ks)
     hits = dict.fromkeys(ks, 0)
     mrr = dict.fromkeys(ks, 0.0)

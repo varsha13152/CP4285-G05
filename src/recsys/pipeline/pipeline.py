@@ -1,12 +1,13 @@
-"""QCSAR recommendation pipeline — protocol interfaces and orchestrator.
+"""QCSAR search pipeline — protocol interfaces and orchestrator.
 
 Defines the contracts each pipeline stage must satisfy and provides
-a ``RecommendationPipeline`` that wires them together::
+a ``RecommendationPipeline`` that wires them together (query-first cascade)::
 
-    query  →  QueryIntentPredictor.parse()   →  QueryIntent
-           →  QueryConditionedRouter.route() →  QueryRetrievalRequest
-           →  Retriever.retrieve()           →  CandidateSet
-           →  Ranker.rank()                  →  RankedList
+    query            →  QueryIntentPredictor.parse()            →  QueryIntent
+    user_id + recent →  UserProfiler.build_session_profile()    →  EngagementProfile
+                     →  QueryConditionedRouter.route()          →  QueryRetrievalRequest
+                     →  Retriever.retrieve()  (query-only)      →  CandidateSet
+                     →  Ranker.rank()  (personalised, Stage 4)  →  RankedList
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ from recsys.contracts.models import (
     RankedList,
 )
 
-
 # ---------------------------------------------------------------------------
 # Stage protocols — each teammate implements one
 # ---------------------------------------------------------------------------
@@ -30,6 +30,17 @@ class QueryIntentPredictor(Protocol):
     """Stage 1: parse a natural-language query into structured intent."""
 
     def parse(self, query: str) -> QueryIntent: ...
+
+
+class UserProfiler(Protocol):
+    """Stage 2: long-term profile + user-side lookups for Stage 4."""
+
+    def build_session_profile(
+        self,
+        user_id: int,
+        query_intent: QueryIntent,
+        recent_video_ids: list[int] | None = None,
+    ) -> EngagementProfile: ...
 
 
 class QueryConditionedRouter(Protocol):
@@ -44,7 +55,7 @@ class QueryConditionedRouter(Protocol):
 
 
 class Retriever(Protocol):
-    """Stage 3: generate candidate videos from a retrieval request."""
+    """Stage 3: generate query-relevant candidate videos from a retrieval request."""
 
     def retrieve(self, request: QueryRetrievalRequest) -> CandidateSet: ...
 
@@ -60,7 +71,7 @@ class Ranker(Protocol):
 # ---------------------------------------------------------------------------
 
 class RecommendationPipeline:
-    """QCSAR pipeline: query → intent → routing → retrieval → ranking.
+    """QCSAR pipeline: query → intent → profile → routing → retrieval → ranking.
 
     Parameters
     ----------
@@ -69,9 +80,13 @@ class RecommendationPipeline:
     router : QueryConditionedRouter
         Query-conditioned router.
     retriever : Retriever
-        Candidate generation (Stage 3).
-    ranker : Ranker
-        Ranking and re-ranking (Stages 4-6).
+        Candidate retrieval (Stage 3).
+    user_profiler : UserProfiler | None
+        Stage 2 (e.g. ``UserModeller``). ``None`` → no profile; retrieval is
+        query-only anyway, so anonymous search still works.
+    ranker : Ranker | None
+        Ranking and re-ranking (Stages 4-6). Not implemented yet — without it
+        use :meth:`retrieve`; :meth:`recommend` requires one.
     """
 
     def __init__(
@@ -79,31 +94,51 @@ class RecommendationPipeline:
         parser: QueryIntentPredictor,
         router: QueryConditionedRouter,
         retriever: Retriever,
-        ranker: Ranker,
+        user_profiler: UserProfiler | None = None,
+        ranker: Ranker | None = None,
     ) -> None:
         self._parser = parser
         self._router = router
         self._retriever = retriever
+        self._user_profiler = user_profiler
         self._ranker = ranker
 
-    def recommend(
+    def retrieve(
         self,
         query: str,
         user_id: int | None = None,
-        context: dict | None = None,
-    ) -> RankedList:
-        """Run the full pipeline for a natural-language query.
+        recent_video_ids: list[int] | None = None,
+    ) -> CandidateSet:
+        """Run Stages 1–3 and return the candidate pool for Stage 4.
 
         Parameters
         ----------
         query : str
             Natural-language search query (e.g. "fun cooking videos").
         user_id : int | None
-            Optional user ID for personalisation.
-        context : dict | None
-            Extra context (time of day, device, etc.) — reserved for future use.
+            Optional user ID; enables the Stage 2 profile.
+        recent_video_ids : list[int] | None
+            The user's current-session videos (oldest → newest) for
+            ``EngagementProfile.session_context``.
         """
         intent = self._parser.parse(query)
-        request = self._router.route(intent, user_id=user_id)
-        candidates = self._retriever.retrieve(request)
-        return self._ranker.rank(candidates)
+        profile = None
+        if user_id is not None and self._user_profiler is not None:
+            profile = self._user_profiler.build_session_profile(
+                user_id, intent, recent_video_ids=recent_video_ids
+            )
+        request = self._router.route(intent, user_id=user_id, engagement_profile=profile)
+        return self._retriever.retrieve(request)
+
+    def recommend(
+        self,
+        query: str,
+        user_id: int | None = None,
+        recent_video_ids: list[int] | None = None,
+    ) -> RankedList:
+        """Run the full pipeline (Stages 1–4)."""
+        if self._ranker is None:
+            raise NotImplementedError(
+                "No Stage 4 ranker configured; use retrieve() for the candidate pool."
+            )
+        return self._ranker.rank(self.retrieve(query, user_id, recent_video_ids))

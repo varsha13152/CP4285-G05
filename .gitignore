@@ -29,6 +29,7 @@ env/
 *.swp
 *.swo
 *~
+dylan-docs/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -41,3 +42,5 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+.claude/settings.local.json
+data/processed/

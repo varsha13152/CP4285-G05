@@ -5,6 +5,7 @@ import pytest
 
 from recsys.session_modelling import MarkovSessionModel, Sessioniser
 from recsys.session_modelling.evaluate import (
+    PopularityBaseline,
     chronological_session_split,
     evaluate_next_item,
     split_by_timestamp,
@@ -78,6 +79,20 @@ def test_hr_is_monotonic_in_k():
 def test_empty_test_set():
     model = MarkovSessionModel().fit(_SEQS)
     assert evaluate_next_item(model, [[5]], ks=(10,))["n_eval_pairs"] == 0  # len-1 session -> no pairs
+
+
+def test_collapse_repeats_drops_rewatch_pairs():
+    # A rewatch (7 -> 7) is an easy "hit" once 7 -> 7 is learned; collapsing removes it.
+    model = MarkovSessionModel().fit([[7, 7], [1, 2]])
+    raw = evaluate_next_item(model, [[7, 7, 1]], ks=(1,))
+    collapsed = evaluate_next_item(model, [[7, 7, 1]], ks=(1,), collapse_repeats=True)
+    assert raw["n_eval_pairs"] == 2 and raw["HR@1"] == pytest.approx(0.5)
+    assert collapsed["n_eval_pairs"] == 1 and collapsed["HR@1"] == 0.0
+
+
+def test_popularity_baseline_ignores_context(model):
+    pop = PopularityBaseline(model)
+    assert pop.predict_next([1]) == pop.predict_next([2]) == model.predict_next([])
 
 
 # ---------------------------------------------------------------------------

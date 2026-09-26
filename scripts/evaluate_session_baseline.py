@@ -11,6 +11,10 @@ Usage::
     python scripts/evaluate_session_baseline.py --sample-users 2000 # faster sample
     python scripts/evaluate_session_baseline.py --strategies fixed --gap-minutes 30
     python scripts/evaluate_session_baseline.py --ablation          # fair shared-test-set comparison
+    python scripts/evaluate_session_baseline.py --collapse-repeats  # don't score consecutive rewatches
+
+Every strategy is reported next to a context-free popularity baseline fitted on
+the same train sessions, so the Markov model's added value is visible.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from recsys.data.schema import TIMESTAMP, USER_ID, VIDEO_ID
 from recsys.session_modelling import MarkovSessionModel, Sessioniser
 from recsys.session_modelling.evaluate import (
+    PopularityBaseline,
     chronological_session_split,
     evaluate_next_item,
     split_by_timestamp,
@@ -73,7 +78,9 @@ def _run_ablation(df: pd.DataFrame, args: argparse.Namespace, ks: tuple[int, ...
         t0 = time.time()
         train_seqs = _make(strategy, args).to_sequences(train_df)
         model = MarkovSessionModel().fit(train_seqs)
-        metrics = evaluate_next_item(model, test_seqs, ks=ks)
+        metrics = evaluate_next_item(
+            model, test_seqs, ks=ks, collapse_repeats=args.collapse_repeats
+        )
         dt = time.time() - t0
         line = {"strategy": strategy, "train_sessions": len(train_seqs)}
         for k in ks:
@@ -108,6 +115,11 @@ def main() -> None:
         default=0.8,
         help="global timestamp quantile for the ablation train/test split",
     )
+    p.add_argument(
+        "--collapse-repeats",
+        action="store_true",
+        help="merge consecutive rewatches in test sequences before scoring",
+    )
     args = p.parse_args()
 
     ks = tuple(int(x) for x in args.ks.split(","))
@@ -126,7 +138,10 @@ def main() -> None:
         avg_len = len(assigned) / n_sessions
         train, test = chronological_session_split(assigned, test_ratio=args.test_ratio)
         model = MarkovSessionModel().fit(train)
-        metrics = evaluate_next_item(model, test, ks=ks)
+        metrics = evaluate_next_item(model, test, ks=ks, collapse_repeats=args.collapse_repeats)
+        pop = evaluate_next_item(
+            PopularityBaseline(model), test, ks=ks, collapse_repeats=args.collapse_repeats
+        )
         dt = time.time() - t0
         print(
             f"\n[{strategy}] {n_sessions:,} sessions "
@@ -140,6 +155,11 @@ def main() -> None:
                 print(f"    {m}@{k}: {metrics[f'{m}@{k}']:.4f}")
                 line[f"{m}@{k}"] = round(metrics[f"{m}@{k}"], 4)
         rows.append(line)
+        pop_line = {"strategy": f"{strategy} (popularity)", "avg_session_len": round(avg_len, 1)}
+        for k in ks:
+            for m in ("HR", "MRR", "NDCG"):
+                pop_line[f"{m}@{k}"] = round(pop[f"{m}@{k}"], 4)
+        rows.append(pop_line)
 
     print("\n=== summary ===")
     print(pd.DataFrame(rows).to_string(index=False))
