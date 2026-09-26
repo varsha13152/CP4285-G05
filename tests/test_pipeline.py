@@ -1,8 +1,8 @@
-"""Tests for the pipeline orchestrator's Stage 1 → 2 → router → 3 wiring."""
+"""Tests for the pipeline orchestrator's Stage 1 → 2 → router → 3 → 4 wiring."""
 
 import pytest
 
-from recsys.contracts.models import CandidateSet
+from recsys.contracts.models import CandidateSet, RankedItem, RankedList
 from recsys.pipeline.pipeline import RecommendationPipeline
 from recsys.routing import QueryRouter
 
@@ -59,3 +59,34 @@ def test_recommend_requires_a_ranker(sample_query_intent, sample_engagement_prof
     pipe, _, _ = _pipeline(sample_query_intent, sample_engagement_profile)
     with pytest.raises(NotImplementedError):
         pipe.recommend("fun cooking videos")
+
+
+class _Ranker:
+    """Minimal stub that satisfies the Ranker protocol."""
+
+    def rank(self, candidates):
+        return RankedList(
+            user_id=candidates.user_id,
+            items=[
+                RankedItem(
+                    video_id=c.video_id, rank=i + 1, score=c.score,
+                    source=c.source, category_ids=c.category_ids,
+                )
+                for i, c in enumerate(candidates.candidates)
+            ],
+            num_candidates_considered=len(candidates.candidates),
+            intent_type=candidates.request.query_intent.intent_type,
+        )
+
+
+def test_recommend_with_ranker(sample_query_intent, sample_engagement_profile):
+    profiler, retriever = _Profiler(sample_engagement_profile), _Retriever()
+    ranker = _Ranker()
+    pipe = RecommendationPipeline(
+        _Parser(sample_query_intent), QueryRouter(), retriever,
+        user_profiler=profiler, ranker=ranker,
+    )
+    result = pipe.recommend("fun cooking videos", user_id=1)
+    assert isinstance(result, RankedList)
+    assert result.user_id == 1
+    assert result.intent_type == sample_query_intent.intent_type
