@@ -1,0 +1,12 @@
+NDCG@10 = 0.2663
+w_query = 0.5000
+w_query_sem = 0.0500
+w_popularity = 0.2000
+w_cf = 0.0500
+w_cat_affinity = 0.0500
+w_social = 0.0750
+w_session_markov = 0.0750
+stage5_alpha = 0.7000
+
+Default NDCG@10 = 0.2576
+Improvement: +0.0086
