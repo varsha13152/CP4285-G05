@@ -307,6 +307,50 @@ class TestStage6Constraints:
         # vid 10 seen → score × 0.5, which drops it below vid 20.
         assert result.items[0].video_id == 20
 
+    def test_seen_video_preserved_for_specific_search(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        """SPECIFIC_SEARCH has seen_demotion=1.0 — seen videos keep their rank."""
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, top_k=20)
+
+        intent = _query_intent(intent_type=QueryIntentType.SPECIFIC_SEARCH)
+        cands = [
+            _candidate(10, 0.91, seen=1.0, popularity=0.5, trending=0.5),
+            _candidate(20, 0.90, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(30, 0.50, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(40, 0.30, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(50, 0.20, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(60, 0.10, seen=0.0, popularity=0.5, trending=0.5),
+        ]
+        result = ranker.rank(_candidate_set(cands, intent=intent))
+        # No demotion → vid 10 stays on top despite being seen.
+        assert result.items[0].video_id == 10
+
+    def test_seen_video_aggressively_demoted_for_exploration(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        """EXPLORATION has seen_demotion=0.3 — seen videos drop harder than default."""
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, top_k=20)
+
+        intent = _query_intent(intent_type=QueryIntentType.EXPLORATION)
+        # vid 10 (seen) scores higher, but 0.3× demotion is harsh.
+        cands = [
+            _candidate(10, 0.91, seen=1.0, popularity=0.5, trending=0.5),
+            _candidate(20, 0.90, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(30, 0.50, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(40, 0.30, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(50, 0.20, seen=0.0, popularity=0.5, trending=0.5),
+            _candidate(60, 0.10, seen=0.0, popularity=0.5, trending=0.5),
+        ]
+        result = ranker.rank(_candidate_set(cands, intent=intent))
+        # 0.3× demotion drops vid 10 well below vid 20.
+        assert result.items[0].video_id == 20
+        # vid 10 should also be below vid 30 (0.3× is very aggressive)
+        video_ids = [item.video_id for item in result.items]
+        assert video_ids.index(10) > video_ids.index(30)
+
     def test_category_diversity_penalises_repeats(
         self, ranker: QCSARRanker,
     ) -> None:

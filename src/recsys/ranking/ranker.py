@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.stats import rankdata
 
+from recsys.contracts.enums import QueryIntentType
 from recsys.contracts.models import (
     CandidateSet,
     RankedItem,
@@ -54,12 +55,27 @@ class QCSARRanker:
     stage5_alpha : float
         Mixing ratio: ``alpha * stage4 + (1 - alpha) * stage5``.
     seen_demotion : float
-        Multiplicative penalty for already-seen videos (Stage 6).
+        Fallback multiplicative penalty for already-seen videos (Stage 6).
+        Overridden per-query by ``INTENT_SEEN_DEMOTION`` when the query's
+        intent type has an entry.
     diversity_window : int
         Sliding window size for category-diversity enforcement (Stage 6).
     top_k : int
         Maximum items in the final ``RankedList``.
     """
+
+    # Per-intent seen-video demotion.  SPECIFIC_SEARCH preserves seen
+    # videos (the user is re-finding); EXPLORATION aggressively demotes
+    # them (novelty is the goal).  Missing intents fall back to the
+    # constructor's ``seen_demotion``.
+    INTENT_SEEN_DEMOTION: dict[QueryIntentType, float] = {
+        QueryIntentType.SPECIFIC_SEARCH: 1.0,   # no penalty — re-finding
+        QueryIntentType.LEARNING:        0.8,    # mild — rewatching tutorials is normal
+        QueryIntentType.ENTERTAINMENT:   0.5,    # default — fresh content preferred
+        QueryIntentType.INSPIRATION:     0.5,    # default
+        QueryIntentType.SOCIAL:          0.5,    # default
+        QueryIntentType.EXPLORATION:     0.3,    # aggressive — novelty is the point
+    }
 
     def __init__(
         self,
@@ -347,10 +363,13 @@ class QCSARRanker:
                 score *= 0.8
             adjusted.append((cand, score))
 
-        # 2. Seen-video demotion
+        # 2. Seen-video demotion — intent-conditioned
+        seen_penalty = self.INTENT_SEEN_DEMOTION.get(
+            intent.intent_type, self._seen_demotion,
+        )
         for i, (cand, score) in enumerate(adjusted):
             if cand.features.get("seen", 0.0) >= 1.0:
-                adjusted[i] = (cand, score * self._seen_demotion)
+                adjusted[i] = (cand, score * seen_penalty)
 
         # 3. Category diversity (sliding-window penalty)
         # Sort by score first so the window is applied in rank order.
