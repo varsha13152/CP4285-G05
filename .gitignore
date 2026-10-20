@@ -44,3 +44,4 @@ Thumbs.db
 htmlcov/
 .claude/settings.local.json
 data/processed/
+.claude/worktrees/
