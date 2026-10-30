@@ -53,19 +53,17 @@ def main() -> None:
     ap.add_argument("--max-queries", type=int, default=10)
     ap.add_argument("--num-candidates", type=int, default=200)
     ap.add_argument("--lang", default="zh", choices=["en", "zh", "both"])
+    ap.add_argument("--query-set", default="legacy", choices=["legacy", "v2", "v3"],
+                    help="v2/v3 tune on their dev split")
     ap.add_argument("--grid-steps", type=int, default=5,
                     help="Number of grid values per weight (default 5)")
     args = ap.parse_args()
 
-    from tests.fixtures.synthetic_queries import SYNTHETIC_QUERIES
-    from tests.fixtures.synthetic_queries_zh import SYNTHETIC_QUERIES_ZH
+    from tests.fixtures.query_sets import load_queries
 
-    if args.lang == "zh":
-        all_queries = SYNTHETIC_QUERIES_ZH
-    elif args.lang == "both":
-        all_queries = SYNTHETIC_QUERIES + SYNTHETIC_QUERIES_ZH
-    else:
-        all_queries = SYNTHETIC_QUERIES
+    # v2/v3: tune on the dev split only, so reported test numbers aren't overfitted
+    all_queries = load_queries(args.query_set, "all" if args.query_set == "legacy" else "dev",
+                               args.lang)
 
     from recsys.data.item_features import caption_category_table
     from recsys.data.loader import load_kuairec
