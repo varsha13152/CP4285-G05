@@ -94,17 +94,22 @@ def main() -> None:
         ranker_base["caption_embeddings"] = emb_data["embeddings"]
         ranker_base["caption_video_ids"] = emb_data["video_ids"]
 
+    from recsys.data.schema import FEAT, USER_ID, VIDEO_ID, WATCH_RATIO
+
     # Ground truth
     user_gt: dict[int, dict[int, float]] = {}
     for row in small.itertuples(index=False):
-        uid, vid, wr = int(row.user_id), int(row.video_id), float(row.watch_ratio)
+        uid = int(getattr(row, USER_ID))
+        vid = int(getattr(row, VIDEO_ID))
+        wr = float(getattr(row, WATCH_RATIO))
         user_gt.setdefault(uid, {})[vid] = wr
 
     vid_cats: dict[int, set[int]] = {}
     df_cats = pd.read_csv(f"{args.data_dir}/item_categories.csv")
     for row in df_cats.itertuples(index=False):
-        cats = ast.literal_eval(row.feat) if isinstance(row.feat, str) else row.feat
-        vid_cats[int(row.video_id)] = set(cats)
+        feat_val = getattr(row, FEAT)
+        cats = ast.literal_eval(feat_val) if isinstance(feat_val, str) else feat_val
+        vid_cats[int(getattr(row, VIDEO_ID))] = set(cats)
 
     # ------------------------------------------------------------------
     # 2. Cache CandidateSets (Stages 1-3) — the expensive part
@@ -112,6 +117,9 @@ def main() -> None:
     cases_by_q: dict[str, list[dict]] = {}
     for c in SESSION_CASES_V3:
         cases_by_q.setdefault(c["query_id"], []).append(c)
+    # Ensure anonymous cases are processed first (anonymous* baseline depends on it)
+    for qid in cases_by_q:
+        cases_by_q[qid].sort(key=lambda c: (c["user_id"] is not None, c["condition"]))
 
     print(f"\nCaching CandidateSets for {len(queries)} queries × session cases ...", flush=True)
     # Each entry: (case_dict, query_dict, CandidateSet)

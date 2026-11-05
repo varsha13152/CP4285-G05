@@ -78,6 +78,11 @@ class QCSARRanker:
         w_query: float = 0.5,
         top_k: int = 20,
     ) -> None:
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+        if not 0.0 <= w_query <= 1.0:
+            raise ValueError(f"w_query must be in [0, 1], got {w_query}")
+
         # L2-normalise ALS factors for cosine similarity via dot product.
         norms = np.linalg.norm(item_factors, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1.0, norms)  # avoid div-by-zero
@@ -137,12 +142,7 @@ class QCSARRanker:
                 if c.category_ids and cat_dist:
                     cat_aff_arr[i] = cat_dist.get(c.category_ids[0], 0.0)
 
-        lt_signals = [
-            self._rank_normalize(cf_arr),
-            self._rank_normalize(cat_aff_arr),
-            self._rank_normalize(social_arr),
-        ]
-        long_term = np.mean(lt_signals, axis=0)
+        long_term = self._active_mean([cf_arr, cat_aff_arr, social_arr])
 
         # --- Short-term personal signals ---
         markov_arr = np.zeros(n, dtype=np.float64)
@@ -204,13 +204,9 @@ class QCSARRanker:
                                 continue
                             sess_sim_arr[i] = float(self._als_normed[row] @ sv)
 
-        st_signals = [
-            self._rank_normalize(markov_arr),
-            self._rank_normalize(als_sim_arr),
-            self._rank_normalize(cap_sim_arr),
-            self._rank_normalize(sess_sim_arr),
-        ]
-        short_term = np.mean(st_signals, axis=0)
+        short_term = self._active_mean(
+            [markov_arr, als_sim_arr, cap_sim_arr, sess_sim_arr],
+        )
 
         # --- α-blended scoring ---
         personal = self._alpha * long_term + (1 - self._alpha) * short_term
@@ -238,6 +234,21 @@ class QCSARRanker:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _active_mean(self, raw_signals: list[np.ndarray]) -> np.ndarray:
+        """Mean of rank-normalised signals, excluding all-zero signals.
+
+        Signals where every candidate has the same value (e.g. social
+        scores when the user has no friends) are dropped so they don't
+        dilute the composite.  Returns zeros when *all* signals are dead.
+        """
+        normed = []
+        for arr in raw_signals:
+            if arr.max() != arr.min():  # has variance → active
+                normed.append(self._rank_normalize(arr))
+        if not normed:
+            return np.zeros_like(raw_signals[0])
+        return np.mean(normed, axis=0)
 
     @staticmethod
     def _rank_normalize(arr: np.ndarray) -> np.ndarray:
