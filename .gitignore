@@ -45,3 +45,4 @@ htmlcov/
 .claude/settings.local.json
 data/processed/
 .claude/worktrees/
+data/external/

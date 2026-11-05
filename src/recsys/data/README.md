@@ -19,6 +19,11 @@ items = build_item_table(data.caption_categories, data.item_daily_features)
 Import column names from `recsys.data.schema` (`USER_ID`, `VIDEO_ID`,
 `WATCH_RATIO`, ...) instead of hardcoding strings.
 
+**KuaiSAR (optional).** Only needed to re-run `scripts/analyze_kuaisar_queries.py`
+(the profile it writes, `results/kuaisar_query_profile.json`, is committed).
+Download KuaiSAR-small (`KuaiSAR.zip`, https://zenodo.org/record/8181109) and
+unpack its CSVs into `data/external/kuaisar/` (gitignored).
+
 ## KuaiRec at a glance
 
 KuaiRec 2.0 ([GitHub](https://github.com/chongminggao/KuaiRec), data on

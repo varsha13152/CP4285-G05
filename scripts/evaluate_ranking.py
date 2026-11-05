@@ -11,6 +11,16 @@ Usage:
     python scripts/evaluate_ranking.py
     python scripts/evaluate_ranking.py --max-users 20 --k 5 10 20
     python scripts/evaluate_ranking.py --verbose --relevance-threshold 0.5
+    python scripts/evaluate_ranking.py --query-set v3 --split test --cases
+
+Without ``--cases``, each user's "recent" videos are their 5 most-watched
+small_matrix videos, which are also the ground truth (a leak, kept only so
+legacy numbers stay comparable). ``--cases`` (v3) uses
+tests/fixtures/session_cases_v3.py instead: recent videos from big_matrix
+sessions, reported per condition (anonymous / none / related / unrelated) on
+two metrics: query relevance (P@5 / MRR on answer_video_ids) and personal
+preference (condensed-list nDCG@5 on small_matrix watch_ratio). See
+src/recsys/evaluation/README.md.
 """
 
 import argparse
@@ -63,20 +73,19 @@ def main() -> None:
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--lang", default="en", choices=["en", "zh", "both"],
                     help="Query language: en (English), zh (Chinese), both")
+    ap.add_argument("--query-set", default="legacy", choices=["legacy", "v2", "v3"])
+    ap.add_argument("--split", default="all", choices=["dev", "test", "all"])
+    ap.add_argument("--cases", action="store_true",
+                    help="v3 only: leak-free session cases, metrics per condition")
     ap.add_argument("--out", default=None,
                     help="Output file (default: results/ranking_eval_{date}.txt)")
     args = ap.parse_args()
 
-    from tests.fixtures.synthetic_queries import SYNTHETIC_QUERIES
-    from tests.fixtures.synthetic_queries_zh import SYNTHETIC_QUERIES_ZH
+    from tests.fixtures.query_sets import load_queries
 
-    if args.lang == "zh":
-        all_queries = SYNTHETIC_QUERIES_ZH
-    elif args.lang == "both":
-        all_queries = SYNTHETIC_QUERIES + SYNTHETIC_QUERIES_ZH
-    else:
-        all_queries = SYNTHETIC_QUERIES
-    SYNTHETIC_QUERIES = all_queries  # noqa: F841 — reassign for the rest of main()
+    if args.cases and args.query_set != "v3":
+        ap.error("--cases needs --query-set v3")
+    SYNTHETIC_QUERIES = load_queries(args.query_set, args.split, args.lang)
 
     from recsys.data.item_features import caption_category_table
     from recsys.data.loader import load_kuairec
@@ -115,6 +124,10 @@ def main() -> None:
         ranker_kwargs["caption_embeddings"] = emb_data["embeddings"]
         ranker_kwargs["caption_video_ids"] = emb_data["video_ids"]
         print(f"  Caption embeddings loaded ({emb_data['embeddings'].shape})")
+    if args.cases:
+        # longer list so the condensed (labelled-only) list has enough items to grade;
+        # the ranker cuts after diversifying, so the first 20 results are unchanged
+        ranker_kwargs["top_k"] = 100
     ranker = QCSARRanker(**ranker_kwargs)
 
     pipeline = RecommendationPipeline(
@@ -146,6 +159,9 @@ def main() -> None:
     # 3. Evaluate each query × user
     # ------------------------------------------------------------------
     queries = SYNTHETIC_QUERIES[:args.max_queries] if args.max_queries else SYNTHETIC_QUERIES
+    if args.cases:
+        _evaluate_cases(pipeline, queries, user_gt, vid_cats, args)
+        return
     print(f"Evaluating {len(queries)} queries × up to {args.max_users} users each")
     print(f"  relevance: watch_ratio >= {args.relevance_threshold}, "
           f"query-aware (topic-filtered), "
@@ -248,6 +264,116 @@ def main() -> None:
     cov = coverage(all_ranked_lists, total_items)
     p(f"  Coverage = {cov:.4f} ({int(cov * total_items)}/{total_items} items)")
 
+    _save(lines, args)
+
+
+def _evaluate_cases(pipeline, queries, user_gt, vid_cats, args) -> None:
+    """Score the leak-free v3 session cases with two separate metrics.
+
+    One pipeline run per case (full catalogue), graded twice:
+
+    * **Metric 1, query relevance** (guardrail): P@5 and MRR against the query's
+      ``answer_video_ids``. Same key for every user, so the baseline is ``anonymous``.
+    * **Metric 2, personal preference** (target): nDCG@5 against *this user's*
+      small_matrix ``watch_ratio`` (capped) on on-topic videos; off-topic videos
+      score 0. Videos without a small_matrix label for the user are skipped
+      (condensed list), never counted as misses. Named queries are excluded:
+      their category is too broad to stand in for the query. Baseline
+      ``anonymous*`` = the query's anonymous ranking graded against the same user.
+
+    ``judged@5`` = share of the first 5 results that carry a label (diagnostic).
+    """
+    from types import SimpleNamespace
+
+    from tests.fixtures.session_cases_v3 import CONDITION_MIX, SESSION_CASES_V3
+
+    from recsys.evaluation.metrics import mrr, ndcg_at_k, precision_at_k
+
+    cases_by_q: dict[str, list[dict]] = {}
+    for c in SESSION_CASES_V3:
+        cases_by_q.setdefault(c["query_id"], []).append(c)
+    conds = ["anonymous", "anonymous*", "none", "related", "unrelated"]
+    m1 = {c: {"P@5": [], "MRR": []} for c in conds}
+    m2 = {c: {"nDCG@5": [], "judged@5": []} for c in conds}
+
+    def query_relevance(cond, ranked, answers):
+        m1[cond]["P@5"].append(precision_at_k(ranked, answers, 5))
+        m1[cond]["MRR"].append(mrr(ranked, answers))
+
+    def personal(cond, ranked, labels, topics):
+        rel = {v: min(wr, WATCH_RATIO_CAP) if vid_cats.get(v, set()) & topics else 0.0
+               for v, wr in labels.items()}
+        judged = [i for i in ranked.items if i.video_id in rel]  # condensed list
+        m2[cond]["nDCG@5"].append(ndcg_at_k(SimpleNamespace(items=judged), rel, 5))
+        m2[cond]["judged@5"].append(sum(i.video_id in rel for i in ranked.items[:5]) / 5)
+
+    def recommend(*a, **kw):
+        # ponytail: plain retry for transient LLM API errors (e.g. SOCLaaS 503s)
+        for attempt in range(5):
+            try:
+                return pipeline.recommend(*a, **kw)
+            except Exception:  # noqa: BLE001
+                if attempt == 4:
+                    raise
+                time.sleep(15 * 2 ** attempt)  # 15s, 30s, 60s, 120s
+
+    print(f"Evaluating {len(queries)} queries × session cases (leak-free)\n")
+    for qi, q in enumerate(queries, 1):
+        print(f"[{qi:3d}/{len(queries)}] {q['query']!r}", flush=True)
+        topics, answers = set(q["expected_topics"]), set(q["answer_video_ids"])
+        scored_personal = q.get("anchor") is None
+        anon = None
+        for c in cases_by_q.get(q["id"], []):
+            if c["user_id"] is None:
+                anon = recommend(q["query"])
+                query_relevance("anonymous", anon, answers)
+                continue
+            ranked = recommend(q["query"], user_id=c["user_id"],
+                               recent_video_ids=c["recent_video_ids"] or None)
+            query_relevance(c["condition"], ranked, answers)
+            if scored_personal:
+                labels = user_gt.get(c["user_id"], {})
+                personal(c["condition"], ranked, labels, topics)
+                if c["condition"] == "none" and anon is not None:
+                    personal("anonymous*", anon, labels, topics)
+
+    lines: list[str] = []
+
+    def p(msg: str = "") -> None:
+        print(msg)
+        lines.append(msg)
+
+    def avg(acc, c, m):
+        return float(np.mean(acc[c][m])) if acc[c][m] else float("nan")
+
+    p()
+    p("=" * 78)
+    p(f" QCSAR ranking — v3 session cases ({args.split} split, {args.lang})")
+    p("=" * 78)
+    p("  Metric 1 — query relevance (answer_video_ids; guardrail, baseline = anonymous)")
+    p(f"  {'condition':<12}{'n':>6}{'P@5':>9}{'MRR':>9}   lift P@5 / MRR")
+    for c in ["anonymous", "none", "related", "unrelated"]:
+        row = f"  {c:<12}{len(m1[c]['MRR']):>6}{avg(m1, c, 'P@5'):>9.4f}{avg(m1, c, 'MRR'):>9.4f}"
+        if c in CONDITION_MIX:
+            row += "   " + " / ".join(f"{avg(m1, c, m) - avg(m1, 'anonymous', m):+.4f}"
+                                       for m in ("P@5", "MRR"))
+        p(row)
+    p()
+    p("  Metric 2 — personal preference (user's small_matrix watch_ratio, condensed list;")
+    p("  non-named queries; target, baseline = anonymous*)")
+    p(f"  {'condition':<12}{'n':>6}{'nDCG@5':>9}{'judged@5':>10}   lift nDCG@5")
+    for c in ["anonymous*", "none", "related", "unrelated"]:
+        row = (f"  {c:<12}{len(m2[c]['nDCG@5']):>6}{avg(m2, c, 'nDCG@5'):>9.4f}"
+               f"{avg(m2, c, 'judged@5'):>10.4f}")
+        if c in CONDITION_MIX:
+            row += f"   {avg(m2, c, 'nDCG@5') - avg(m2, 'anonymous*', 'nDCG@5'):+.4f}"
+        p(row)
+    p(f"\n  realistic blend (KuaiSAR mix {CONDITION_MIX}):")
+    p(f"    P@5={sum(w * avg(m1, c, 'P@5') for c, w in CONDITION_MIX.items()):.4f}  "
+      f"MRR={sum(w * avg(m1, c, 'MRR') for c, w in CONDITION_MIX.items()):.4f}  "
+      f"nDCG@5={sum(w * avg(m2, c, 'nDCG@5') for c, w in CONDITION_MIX.items()):.4f}")
+    p("  Personalisation works if metric 2 rises vs anonymous* while metric 1 holds.")
+    p("  Metric 2 only sees the ~33% of videos in small_matrix (the popular head).")
     _save(lines, args)
 
 

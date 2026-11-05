@@ -1,0 +1,91 @@
+{
+  "n_searches": 267608,
+  "n_users": 25877,
+  "length": {
+    "median_words": 3.0,
+    "share": {
+      "1": 0.1068,
+      "2-3": 0.5285,
+      "4+": 0.3647
+    },
+    "median_by_entry_point": {
+      "HISTORY": 3.0,
+      "PLACEHOLDER": 3.0,
+      "RELATED_FEED_QUERY": 3.0,
+      "SUGGESTION": 3.0,
+      "TRENDING": 3.0,
+      "UNKNOWN_PAGE": 3.0,
+      "USER_INPUT": 3.0
+    }
+  },
+  "head_tail": {
+    "one_off_share": 0.5229,
+    "head_share_10plus": 0.1153,
+    "top_1pct_query_coverage": 0.1272
+  },
+  "viewing": {
+    "median_results_per_search": 6.0,
+    "share_searches_with_click": 0.6589,
+    "median_clicks_when_clicked": 1.0
+  },
+  "category_demand": {
+    "二次元": 0.1011,
+    "游戏": 0.0988,
+    "影视和短剧": 0.0791,
+    "随手拍": 0.0771,
+    "明星娱乐": 0.0664,
+    "音乐": 0.0572,
+    "情感": 0.047,
+    "资讯": 0.0377,
+    "美食": 0.0343,
+    "才艺": 0.0316,
+    "舞蹈": 0.0287,
+    "读书": 0.0285,
+    "高新数码": 0.0268,
+    "亲子": 0.0255,
+    "生活": 0.0255,
+    "搞笑": 0.025,
+    "教育": 0.0244,
+    "穿搭": 0.0229,
+    "运动": 0.0218,
+    "颜值": 0.0183,
+    "美妆": 0.0182,
+    "健康": 0.0153,
+    "汽车": 0.0152,
+    "摄影": 0.0133,
+    "动物": 0.013,
+    "三农": 0.0078,
+    "旅游": 0.0064,
+    "房产家居": 0.0062,
+    "奇人异象": 0.0062,
+    "法律": 0.0034,
+    "星座命理": 0.0034,
+    "历史": 0.0034,
+    "科学": 0.0033,
+    "财经": 0.0032,
+    "军事": 0.0024,
+    "宗教": 0.0014
+  },
+  "uncategorised_click_share": 0.0899,
+  "specificity": {
+    "single_l1": 0.8113,
+    "two_l1": 0.1365,
+    "three_plus_l1": 0.0522,
+    "single_l3_given_single_l1": 0.9314
+  },
+  "refinement": {
+    "followup_within_5min": 0.3245,
+    "reuse_word_given_followup": 0.5812,
+    "narrowing_given_refinement": 0.3309
+  },
+  "session_context": {
+    "scope": "clicked searches with a categorised result",
+    "share_with_recent_viewing_all_searches": 0.1726,
+    "share_with_recent_viewing_30min": 0.05,
+    "related_given_recent": 0.4219,
+    "median_recent_views": 6.0,
+    "mix_none": 0.95,
+    "mix_related": 0.0211,
+    "mix_unrelated": 0.0289
+  }
+}

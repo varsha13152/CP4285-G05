@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark Stage 3 retrieval modes: semantic vs category vs hybrid.
 
-For each of the 27 synthetic queries (tests/fixtures/synthetic_queries.py):
+For each synthetic query (``--query-set legacy|v2|v3``, ``--split``, ``--lang``):
 
 * **Gold intent** (default): topics = the query's expected topics (confidence
   1.0) and its expected duration, plus a live bge-m3 embedding of the raw query.
@@ -15,6 +15,8 @@ For each of the 27 synthetic queries (tests/fixtures/synthetic_queries.py):
   |candidates ∩ relevant| / min(|relevant|, N), averaged over users with ≥1
   relevant item, then over queries. Stage 3 is not personalised, so one
   candidate list per query serves every user.
+* **P@5 / MRR** (sets with ``answer_video_ids``, i.e. v3) — share of the top 5
+  candidates, and reciprocal rank of the first one, that are a verified answer.
 * **Latency** — retrieval compute per query (ms) and the embedding API call.
 
 Caveat: both accuracy labels come from category ids, which favours the
@@ -23,6 +25,7 @@ category mode; read the semantic numbers as a lower bound.
 Usage:
     python scripts/evaluate_stage3.py
     python scripts/evaluate_stage3.py --use-parser --w-cat 0.3
+    python scripts/evaluate_stage3.py --query-set v3 --split test --lang zh
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from tests.fixtures.synthetic_queries import SYNTHETIC_QUERIES
+from tests.fixtures.query_sets import QUERY_SETS, load_queries
 
 from recsys.contracts.enums import (
     ContentStyle,
@@ -82,6 +85,9 @@ def main() -> None:
     p.add_argument("--embeddings", default="data/processed/caption_embeddings.npz")
     p.add_argument("--num-candidates", type=int, default=100)
     p.add_argument("--use-parser", action="store_true", help="live Stage 1 instead of gold intents")
+    p.add_argument("--query-set", default="legacy", choices=QUERY_SETS)
+    p.add_argument("--split", default="all", choices=["dev", "test", "all"])
+    p.add_argument("--lang", default="en", choices=["en", "zh", "both"])
     p.add_argument("--w-sem", type=float, default=1.0)
     p.add_argument("--w-cat", type=float, default=0.5)
     p.add_argument("--w-dur", type=float, default=0.2)
@@ -90,6 +96,8 @@ def main() -> None:
     args = p.parse_args()
     weights = {"w_sem": args.w_sem, "w_cat": args.w_cat, "w_dur": args.w_dur}
     n = args.num_candidates
+    queries = load_queries(args.query_set, args.split, args.lang)
+    answered = all(q.get("answer_video_ids") for q in queries)
 
     items, emb = load_catalogue(args.data_dir, args.embeddings)
     small = pd.read_csv(
@@ -109,7 +117,7 @@ def main() -> None:
     if args.use_parser:
         parser = QueryParser(embedder=embedder)
     requests, embed_ms = [], []
-    for q in SYNTHETIC_QUERIES:
+    for q in queries:
         t0 = time.perf_counter()
         if parser:
             intent = parser.parse(q["query"])
@@ -123,12 +131,17 @@ def main() -> None:
     for mode in MODES:
         full = HybridRetriever(items, emb, mode=mode, **weights)
         sub = HybridRetriever(items_small, emb_small, mode=mode, **weights)
-        hit, rec, lat = [], [], []
-        for q, req in zip(SYNTHETIC_QUERIES, requests):
+        hit, rec, lat, p5, rr = [], [], [], [], []
+        for q, req in zip(queries, requests):
             expected = set(q["expected_topics"])
             t0 = time.perf_counter()
             cands = full.retrieve(req).candidates
             lat.append((time.perf_counter() - t0) * 1000)
+            if answered:
+                answers = set(q["answer_video_ids"])
+                ids = [c.video_id for c in cands]
+                p5.append(sum(v in answers for v in ids[:5]) / 5)
+                rr.append(next((1 / i for i, v in enumerate(ids, 1) if v in answers), 0.0))
             hit.append(np.mean([bool(expected & set(c.category_ids)) for c in cands])
                        if cands else 0.0)
 
@@ -140,6 +153,8 @@ def main() -> None:
             "mode": mode,
             f"hit_rate@{n}": round(float(np.mean(hit)), 4),
             f"small_recall@{n}": round(float(np.mean(rec)), 4),
+            **({"P@5": round(float(np.mean(p5)), 4), "MRR": round(float(np.mean(rr)), 4)}
+               if answered else {}),
             "retrieval_ms": round(float(np.mean(lat)), 2),
         })
 
@@ -147,7 +162,10 @@ def main() -> None:
     source = "live Stage 1 parser" if args.use_parser else "gold intents + live bge-m3 embedding"
     report = "\n".join([
         f"Stage 3 retrieval benchmark — {today}",
-        f"{len(SYNTHETIC_QUERIES)} synthetic queries, N={n}, intents: {source}",
+        (
+            f"{len(queries)} {args.query_set} queries (split {args.split}, {args.lang}), "
+            f"N={n}, intents: {source}"
+        ),
         f"weights: {weights}",
         (
             f"catalogue: {len(items):,} videos ({int(items['has_text'].sum()):,} with text); "

@@ -160,6 +160,31 @@ tokenised and not joinable). Every Stage 3 number above is therefore a **proxy**
 5. **Some queries have 0 matching small_matrix videos**, which lowers every
    mode's average equally.
 
+### v3 queries and leak-free session cases
+
+Limitations 1, 2 and 5 are addressed by the **v3 set**
+(`tests/fixtures/synthetic_queries_v3.py`; design in
+`dylan-docs/synthetic-queries-v3.md`). It has 100 queries plus 15 refinements,
+shaped like real Kuaishou searches (KuaiSAR profile in
+`results/kuaisar_query_profile.json`). Each query carries hand-verified
+`answer_video_ids`, so **P@5 / MRR** measure specific answers, not just "right
+category". Select it with `--query-set v3 --split test` (tune on `--split dev`).
+
+`scripts/evaluate_ranking.py` used each user's 5 most-watched `small_matrix`
+videos as their "recent" context. Those same videos are the ground truth, which
+leaks the answers. `--cases` (v3) replaces this with
+`tests/fixtures/session_cases_v3.py`: recent videos come from real `big_matrix`
+sessions, and results are reported per condition (anonymous / none / related /
+unrelated), plus the lift over anonymous.
+
+⚠️ **Use the committed test sets as they are; do not regenerate them.** The
+query fixtures were corrected by hand, and the generator scripts exist only to
+document how they were built. See the evaluation README.
+
+**Which metric to use for what** (query relevance vs personal preference), and
+the known limits of the method, are in
+[`src/recsys/evaluation/README.md`](src/recsys/evaluation/README.md).
+
 ### Why hybrid scores the way it does
 
 `score = w_sem·sem + w_cat·cat + w_dur·dur` with defaults `1.0 / 0.5 / 0.2`:
