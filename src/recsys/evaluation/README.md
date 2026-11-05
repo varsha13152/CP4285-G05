@@ -120,19 +120,26 @@ Personal labels exist only for `small_matrix` videos: 33% of the catalogue, and 
 The ranker was simplified from a 14-knob three-stage cascade to a single α-controlled blend:
 
 ```
-personal = α × long_term + (1 − α) × short_term
-score    = w_query × query_relevance + (1 − w_query) × personal
+When both LT and ST composites are active:
+    personal = α × long_term + (1 − α) × short_term
+When only one composite is active (e.g. no session → ST dead):
+    personal = the active composite (full budget)
+score = w_query × query_relevance + (1 − w_query) × personal
 ```
 
 | Composite | Sub-signals (each rank-normalised, then averaged) |
 |---|---|
-| **Long-term** | CF neighbour scores, category affinity, social scores |
-| **Short-term** | Markov transitions, ALS item-item sim, caption sim, session vector sim |
+| **Long-term** (3 signals) | CF neighbour scores, category affinity, social scores |
+| **Short-term** (3 signals) | Markov transitions, ALS item-item sim, caption sim |
+
+**Budget normalisation:** when one composite is dead (e.g. no session → ST = 0), the other gets the full personal budget. α only controls the LT/ST blend when both composites are active — this prevents `none` condition users from receiving half the personalisation of `related` condition users at the same α.
 
 - `alpha` (0–1): the variable of interest. 1.0 = pure long-term, 0.0 = pure short-term.
-- `w_query` (default 0.5): fixed weight on query relevance vs personal signals.
+- `w_query` (default 0.5): weight on query relevance vs personal signals.
 - MRR is now **MRR@3** (returns 0 if no answer in top 3).
-- Removed from old ranker: popularity/trending, direct query↔caption similarity, Stage 5 item-item cascade, Stage 6 (diversity window, seen-video demotion, negative constraint penalties).
+- **Guardrail threshold:** MRR@3 drop ≤ 0.01 absolute vs anonymous baseline. A setting that drops MRR@3 by more than this is deemed to hurt query relevance unacceptably.
+- **Statistical significance:** bootstrap 95% CIs (2,000 resamples, paired) are computed for nDCG@5 lift vs anonymous*. A lift is significant when the CI excludes zero.
+- Removed from old ranker: popularity/trending, direct query↔caption similarity, session vector cosine similarity (redundant with ALS item-item sim), Stage 5 item-item cascade, Stage 6 (diversity window, seen-video demotion, negative constraint penalties).
 
 ### How to run
 
@@ -141,8 +148,8 @@ score    = w_query × query_relevance + (1 − w_query) × personal
 python scripts/evaluate_ranking.py --query-set v3 --split test --cases --alpha 0.5
 # α sweep (caches Stages 1-3 once, re-ranks cheaply)
 python scripts/sweep_alpha.py --alphas 0.0 0.25 0.5 0.75 1.0
-# Tune α + w_query on dev split
-python scripts/tune_weights.py --query-set v3
+# Joint α × w_query sweep (leak-free)
+python scripts/sweep_alpha.py --alphas 0.0 0.25 0.5 0.75 1.0 --w-queries 0.5 0.6 0.7 0.8
 ```
 
 ## Latest results (v3 test split, simplified ranker, α=0.5)

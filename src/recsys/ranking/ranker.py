@@ -3,8 +3,14 @@
 Replaces the original three-stage cascade (Stages 4-6) with a single scoring
 stage whose only tuneable axis is the long-term / short-term balance::
 
-    personal = α × long_term + (1 − α) × short_term
-    score    = w_query × query_relevance + (1 − w_query) × personal
+    When both LT and ST composites are active:
+        personal = α × long_term + (1 − α) × short_term
+    When only one composite is active (e.g. no session → ST dead):
+        personal = the active composite (full budget)
+    score = w_query × query_relevance + (1 − w_query) × personal
+
+This ensures that α only controls the LT/ST *blend*, and users without
+a session still receive the full personalisation budget (not α × LT).
 
 Long-term composite (mean of rank-normalised sub-signals):
     • CF neighbour scores  (kNN collaborative filtering)
@@ -15,7 +21,6 @@ Short-term composite (mean of rank-normalised sub-signals):
     • Markov transition P(next | last watched)
     • ALS item-item similarity to recent videos
     • Caption embedding similarity to recent videos
-    • Session vector cosine similarity
 
 Anonymous users (no profile) are ranked by query relevance alone.
 """
@@ -148,7 +153,6 @@ class QCSARRanker:
         markov_arr = np.zeros(n, dtype=np.float64)
         als_sim_arr = np.zeros(n, dtype=np.float64)
         cap_sim_arr = np.zeros(n, dtype=np.float64)
-        sess_sim_arr = np.zeros(n, dtype=np.float64)
 
         if profile is not None and profile.session_context is not None:
             ctx = profile.session_context
@@ -191,25 +195,25 @@ class QCSARRanker:
                             top_k = min(3, len(sims))
                             cap_sim_arr[i] = float(np.sort(sims)[-top_k:].mean())
 
-                # Session vector cosine similarity
-                sess_vec = ctx.session_vector
-                if sess_vec:
-                    sv = np.array(sess_vec, dtype=np.float64)
-                    sv_norm = np.linalg.norm(sv)
-                    if sv_norm > 0:
-                        sv = sv / sv_norm
-                        for i, c in enumerate(cands):
-                            row = self._vid_to_als.get(c.video_id, -1)
-                            if row == -1:
-                                continue
-                            sess_sim_arr[i] = float(self._als_normed[row] @ sv)
-
         short_term = self._active_mean(
-            [markov_arr, als_sim_arr, cap_sim_arr, sess_sim_arr],
+            [markov_arr, als_sim_arr, cap_sim_arr],
         )
 
-        # --- α-blended scoring ---
-        personal = self._alpha * long_term + (1 - self._alpha) * short_term
+        # --- α-blended scoring (budget-normalised) ---
+        # When one composite is dead (all equal), the other gets the full
+        # personal budget.  α only controls the blend when both contribute.
+        lt_active = long_term.max() != long_term.min()
+        st_active = short_term.max() != short_term.min()
+
+        if lt_active and st_active:
+            personal = self._alpha * long_term + (1 - self._alpha) * short_term
+        elif lt_active:
+            personal = long_term
+        elif st_active:
+            personal = short_term
+        else:
+            personal = np.zeros(n, dtype=np.float64)
+
         scores = self._w_query * query_n + (1 - self._w_query) * personal
 
         # Sort descending (stable) and build RankedList

@@ -70,3 +70,43 @@ def coverage(all_ranked: list[RankedList], total_items: int) -> float:
         for item in ranked.items:
             recommended.add(item.video_id)
     return len(recommended) / total_items if total_items > 0 else 0.0
+
+
+def bootstrap_ci(
+    treatment: list[float],
+    baseline: list[float],
+    *,
+    n_bootstrap: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float, float, bool]:
+    """Paired bootstrap confidence interval for mean(treatment − baseline).
+
+    Parameters
+    ----------
+    treatment, baseline : list[float]
+        Paired per-case metric values (same length, same order).
+    n_bootstrap : int
+        Number of bootstrap resamples.
+    confidence : float
+        Confidence level (e.g. 0.95 for 95% CI).
+    seed : int
+        RNG seed for reproducibility.
+
+    Returns
+    -------
+    (mean_delta, ci_lower, ci_upper, significant)
+        *significant* is True when the CI excludes zero.
+    """
+    deltas = np.asarray(treatment) - np.asarray(baseline)
+    n = len(deltas)
+    rng = np.random.default_rng(seed)
+    boot_means = np.empty(n_bootstrap)
+    for b in range(n_bootstrap):
+        boot_means[b] = rng.choice(deltas, size=n, replace=True).mean()
+    alpha = 1 - confidence
+    ci_lo = float(np.percentile(boot_means, 100 * alpha / 2))
+    ci_hi = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+    mean_delta = float(deltas.mean())
+    significant = (ci_lo > 0) or (ci_hi < 0)  # CI excludes zero
+    return mean_delta, ci_lo, ci_hi, significant

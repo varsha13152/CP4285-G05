@@ -225,7 +225,7 @@ class TestLongTermSignals:
 # ---------------------------------------------------------------------------
 
 class TestShortTermSignals:
-    """Short-term personal signals: Markov, item-item sim, session vector."""
+    """Short-term personal signals: Markov, ALS item-item sim, caption sim."""
 
     def test_markov_transition_scores_used(self, ranker: QCSARRanker) -> None:
         profile = _profile(
@@ -248,10 +248,7 @@ class TestShortTermSignals:
 
         # Recent video: 10 (factor [1,0,0,0]).
         # vid 30 ([1,1,0,0]) is closer than vid 40 ([0,0,1,0]).
-        profile = _profile(
-            recent=[10],
-            session_vector=[1.0, 0.0, 0.0, 0.0],
-        )
+        profile = _profile(recent=[10])
         cands = [
             _candidate(30, 0.5),
             _candidate(40, 0.5),
@@ -288,7 +285,6 @@ class TestAlphaBlending:
         profile = _profile(
             cf={20: 1.0, 40: 0.0},
             recent=[40],  # makes vid 40 similar in short-term
-            session_vector=[0.0, 0.0, 1.0, 0.0],  # points toward vid 40
             next_item={40: 1.0},
         )
         cands = [_candidate(20, 0.5), _candidate(40, 0.5)]
@@ -307,12 +303,11 @@ class TestAlphaBlending:
         profile = _profile(
             cf={20: 1.0, 40: 0.0},
             recent=[40],
-            session_vector=[0.0, 0.0, 1.0, 0.0],
             next_item={40: 1.0},
         )
         cands = [_candidate(20, 0.5), _candidate(40, 0.5)]
         result = ranker.rank(_candidate_set(cands, profile=profile))
-        # α=0 → pure short-term → session/markov favour vid 40
+        # α=0 → pure short-term → markov/als_sim favour vid 40
         assert result.items[0].video_id == 40
 
     def test_w_query_one_ignores_personal(
@@ -328,3 +323,20 @@ class TestAlphaBlending:
         result = ranker.rank(_candidate_set(cands, profile=profile))
         # w_query=1 → pure query relevance → vid 10 wins
         assert result.items[0].video_id == 10
+
+    def test_no_session_gets_full_personal_budget(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        """Without session (ST dead), personal = LT at full strength,
+        NOT α × LT.  Even at low α, LT still has full effect."""
+        factors, ids = item_factors
+        # α=0.1 — with the old formula this would give only 10% LT budget
+        ranker = QCSARRanker(factors, ids, alpha=0.1, w_query=0.5, top_k=20)
+
+        # CF strongly favours vid 20 over vid 10.
+        profile = _profile(cf={20: 1.0, 10: 0.0})
+        # Tied query scores → personal signal decides.
+        cands = [_candidate(10, 0.5), _candidate(20, 0.5)]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        # With budget normalisation, LT gets full weight → vid 20 wins.
+        assert result.items[0].video_id == 20
