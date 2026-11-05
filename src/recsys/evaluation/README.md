@@ -152,40 +152,55 @@ python scripts/sweep_alpha.py --alphas 0.0 0.25 0.5 0.75 1.0
 python scripts/sweep_alpha.py --alphas 0.0 0.25 0.5 0.75 1.0 --w-queries 0.5 0.6 0.7 0.8
 ```
 
-## Latest results (v3 test split, simplified ranker, α=0.5)
+## Latest results (v3 test, α × w_query sweep, `results/alpha_sweep.json`)
 
 - **Stage 3**, gold intents, N = 100 (unchanged):
   - hybrid: P@5 0.111, MRR 0.322;
   - semantic: 0.064 / 0.189;
   - category-only: 0.012 / 0.048.
-- **Ranking** session cases, α=0.5, w_query=0.5 (`results/ranking_eval_v3_simplified.txt`):
 
-**Metric 1 — query relevance (guardrail):**
+### α sweep findings (44 settings: 11 α × 4 w_query)
 
-| Condition | n | P@5 | MRR@3 | lift P@5 / MRR@3 |
+**1. Budget normalisation confirmed.** With the fix, the `none` condition (no session → ST dead) gives the same metrics for all α values at a given w_query. α only controls the LT/ST blend when both composites are active (`related` / `unrelated` conditions).
+
+**2. The `none` condition always fails the guardrail.** No (α, w_query) setting keeps MRR@3 within 0.01 of anonymous for the `none` condition. Even at w_query=0.8 the drop is −0.028. This means long-term personalisation hurts query relevance — the CF/category/social signals pull results off-query.
+
+| w_query | none MRR@3 | MRR@3 drop | none nDCG@5 | nDCG@5 Δ vs anon* |
 |---|---|---|---|---|
-| anonymous (baseline) | 81 | 0.0593 | 0.1296 | — |
-| none (history only) | 405 | 0.0464 | 0.0930 | −0.013 / −0.037 |
-| related | 405 | 0.0351 | 0.0819 | −0.024 / −0.048 |
-| unrelated | 405 | 0.0415 | 0.1025 | −0.018 / −0.027 |
+| 0.5 | 0.0914 | −0.042 ✗ | 0.1634 | −0.002 (ns) |
+| 0.6 | 0.0988 | −0.035 ✗ | 0.1649 | −0.000 (ns) |
+| 0.7 | 0.1004 | −0.033 ✗ | 0.1664 | +0.001 (ns) |
+| 0.8 | 0.1053 | −0.028 ✗ | 0.1657 | −0.001 (ns) |
 
-**Metric 2 — personal preference (target):**
+**3. Session-aware personalisation (`related`) does work — significantly.**
 
-| Condition | n | nDCG@5 | judged@5 | lift nDCG@5 |
-|---|---|---|---|---|
-| anonymous* (baseline) | 185 | 0.1646 | 0.168 | — |
-| none | 185 | 0.1775 | 0.061 | +0.013 |
-| related | 185 | 0.1617 | 0.071 | −0.003 |
-| unrelated | 185 | 0.1696 | 0.087 | +0.005 |
+| Setting | related nDCG@5 Δ | 95% CI | p<0.05? |
+|---|---|---|---|
+| **α=0.4, wq=0.6** | **+0.0138** | [+0.002, +0.026] | **yes ✓** |
+| α=0.5, wq=0.6 | +0.0114 | [+0.000, +0.023] | yes |
+| α=0.6, wq=0.6 | +0.0114 | [+0.001, +0.023] | yes |
+| α=0.4, wq=0.7 | +0.0116 | [+0.001, +0.024] | yes |
+| α=0.3, wq=0.7 | +0.0111 | [+0.000, +0.022] | yes |
+| α=0.6, wq=0.5 | +0.0128 | [+0.001, +0.025] | yes |
+| α=0.7, wq=0.6 | +0.0111 | [+0.000, +0.024] | yes |
 
-Realistic blend: P@5=0.046 · MRR@3=0.093 · nDCG@5=0.177.
+When users have **on-topic recent viewing**, a 60/40 long-term/short-term blend lifts personal preference by +0.014 nDCG@5 (p<0.05). The optimal setting is **α=0.4, w_query=0.6**.
 
-**Findings (α=0.5):**
-- Long-term modelling lifts nDCG@5 by +0.013 in the `none` condition (the clearest signal of personalisation helping).
-- Query relevance (MRR@3) drops across all personalised conditions — the α=0.5 default gives too much weight to personal signals, pulling results off-query.
-- Related recent viewing continues to hurt both metrics — over-personalisation from session context.
-- `judged@5` drops sharply (0.17 → 0.06–0.09) when personal signals are active, indicating personal signals promote long-tail videos outside `small_matrix`.
-- **Next: sweep α** to find the balance that preserves query relevance while capturing the nDCG@5 lift.
+**4. The `unrelated` condition passes the guardrail at some settings** (e.g. α=0.1, wq=0.6: MRR@3 drop = 0.007 ✓, nDCG@5 Δ = +0.005 ns).
+
+**5. Realistic blend** (95% none / 2.1% related / 2.9% unrelated):
+Best realistic nDCG@5 = 0.1666 at α=0.3, wq=0.7 (MRR@3 = 0.1014).
+
+### Interpretation
+
+The experiment reveals a **fundamental trade-off** between query relevance and personal preference:
+
+- **Long-term signals help personal taste but hurt query matching.** CF/category scores promote videos the user tends to enjoy, even when they don't match what was searched. No amount of α/w_query tuning resolves this for the `none` (history-only) condition — the nDCG@5 lift is not statistically significant, and MRR@3 always drops.
+- **Short-term signals add value when session context is available.** The `related` condition is the only one with significant nDCG@5 lift (p<0.05). On-topic recent viewing gives the ranker a useful signal that doesn't conflict with query relevance as much.
+- **α=0.4–0.6 is the optimal LT/ST blend** for session-aware personalisation. Pure LT (α=1.0) or pure ST (α=0.0) both perform worse.
+- **w_query=0.6–0.7 is the sweet spot**: more query weight reduces MRR@3 damage while preserving the nDCG@5 lift.
+
+**Recommendation:** For a deployed system, apply personalisation **only when session context is available** (related condition), at α=0.4, w_query=0.6. For users without session context (95% of searches), use pure query relevance (w_query=1.0).
 
 ## Known limitations
 - No real search judgements: `watch_ratio` shows liking in the feed, not search satisfaction, so metric 2 is a proxy.
@@ -198,8 +213,7 @@ Realistic blend: P@5=0.046 · MRR@3=0.093 · nDCG@5=0.177.
 - Not represented: photo-set, account and uncategorised searches. Refinement queries are graded standalone.
 
 ## Next steps
-1. Run α sweep across 0.0–1.0 and find optimal balance for MRR@3 + nDCG@5.
-2. Pool-judge the top results to complete the answer lists.
+1. Pool-judge the top results to complete the answer lists.
 3. Temporal hold-out on `big_matrix` to grade long-tail personalisation.
 
 Owner of this method: Dylan (Stage 3). The top-level README section "How Stage 3 is evaluated" has the Stage 3 benchmark history.
