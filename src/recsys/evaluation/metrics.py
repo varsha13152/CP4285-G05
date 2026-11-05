@@ -48,9 +48,16 @@ def ndcg_at_k(
     return dcg / idcg if idcg > 0 else 0.0
 
 
-def mrr(ranked: RankedList, ground_truth: set[int]) -> float:
-    """Mean Reciprocal Rank — 1/rank of the first relevant item."""
-    for item in ranked.items:
+def mrr(ranked: RankedList, ground_truth: set[int], k: int | None = None) -> float:
+    """Mean Reciprocal Rank — 1/rank of the first relevant item.
+
+    Parameters
+    ----------
+    k : int | None
+        If set, only consider the top-k items.  Items beyond rank *k*
+        are treated as misses (returns 0.0).
+    """
+    for item in ranked.items[:k]:
         if item.video_id in ground_truth:
             return 1.0 / item.rank
     return 0.0

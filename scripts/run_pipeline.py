@@ -40,13 +40,21 @@ def _build_profiler():
     )
 
 
-def _build_ranker(profiler, emb_path: str = "data/processed/caption_embeddings.npz"):
+def _build_ranker(
+    profiler,
+    emb_path: str = "data/processed/caption_embeddings.npz",
+    *,
+    alpha: float = 0.5,
+    w_query: float = 0.5,
+):
     """Construct a QCSARRanker from a trained profiler + optional caption embeddings."""
     from recsys.ranking import QCSARRanker
 
     kwargs: dict = dict(
         item_factors=profiler.item_factors,
         item_ids=profiler.item_ids,
+        alpha=alpha,
+        w_query=w_query,
     )
     if pathlib.Path(emb_path).exists():
         data = np.load(emb_path)
@@ -63,6 +71,10 @@ def main() -> None:
     parser.add_argument("--num_candidates", type=int, default=100)
     parser.add_argument("--mode", default="hybrid", choices=["semantic", "category", "hybrid"])
     parser.add_argument("--show", type=int, default=20, help="Items to print")
+    parser.add_argument("--alpha", type=float, default=0.5,
+                        help="Long-term / short-term ratio (0=pure ST, 1=pure LT)")
+    parser.add_argument("--w-query", type=float, default=0.5,
+                        help="Query relevance weight (default 0.5)")
     args = parser.parse_args()
 
     from recsys.intent import BgeM3Embedder, QueryParser
@@ -78,7 +90,7 @@ def main() -> None:
         print("Training Stage 2 (ALS + session model) ...", flush=True)
         profiler = _build_profiler()
         print(f"  done in {time.time() - t0:.0f}s")
-        ranker = _build_ranker(profiler)
+        ranker = _build_ranker(profiler, alpha=args.alpha, w_query=args.w_query)
         has_emb = ranker._emb is not None
         print(f"  Stage 4-6 ranker ready (caption embeddings: {has_emb})\n")
 

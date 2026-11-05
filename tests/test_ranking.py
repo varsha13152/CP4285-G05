@@ -1,4 +1,4 @@
-"""Tests for the QCSARRanker (Stages 4-6).
+"""Tests for the simplified QCSARRanker (α-blended long-term / short-term).
 
 Uses tiny synthetic data (6 videos × 4-dim factors) so dot products
 can be verified by hand.  No disk I/O, no LLM calls.
@@ -87,11 +87,8 @@ def _candidate_set(
     profile: EngagementProfile | None = None,
     intent: QueryIntent | None = None,
     user_id: int | None = 1,
-    query_embedding: list[float] | None = None,
 ) -> CandidateSet:
     qi = intent or _query_intent()
-    if query_embedding is not None:
-        qi = _query_intent(query_embedding=query_embedding)
     req = QueryRetrievalRequest(
         query_intent=qi,
         user_id=user_id,
@@ -105,6 +102,7 @@ def _profile(
     *,
     cf: dict[int, float] | None = None,
     social: dict[int, float] | None = None,
+    cat_dist: dict[int, float] | None = None,
     recent: list[int] | None = None,
     next_item: dict[int, float] | None = None,
     session_vector: list[float] | None = None,
@@ -124,7 +122,7 @@ def _profile(
         total_interactions=10,
         active_days=5,
         top_category_ids=[1],
-        category_distribution={1: 1.0},
+        category_distribution=cat_dist if cat_dist is not None else {1: 1.0},
         avg_session_length=3.0,
         recency_days=1,
         cf_neighbour_scores=cf or {},
@@ -134,7 +132,7 @@ def _profile(
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests — contract
 # ---------------------------------------------------------------------------
 
 class TestRankerContract:
@@ -171,181 +169,162 @@ class TestRankerContract:
         assert len(result.items) == 3
 
 
-class TestStage4Signals:
-    """Stage 4: multi-signal blending."""
+# ---------------------------------------------------------------------------
+# Tests — long-term signals
+# ---------------------------------------------------------------------------
 
-    def test_anonymous_user_ranks_by_query_and_popularity(
+class TestLongTermSignals:
+    """Long-term personal signals: CF, category affinity, social."""
+
+    def test_anonymous_user_ranks_by_query_relevance(
         self, ranker: QCSARRanker,
     ) -> None:
-        # No profile → only query relevance + popularity contribute.
+        """No profile → only query relevance contributes."""
         cands = [
-            _candidate(10, 0.9, popularity=0.9, trending=0.9),
-            _candidate(20, 0.5, popularity=0.1, trending=0.1),
+            _candidate(10, 0.9),
+            _candidate(20, 0.5),
         ]
         result = ranker.rank(_candidate_set(cands, profile=None))
         assert result.items[0].video_id == 10
 
     def test_cf_scores_boost_candidates(self, ranker: QCSARRanker) -> None:
-        # Two candidates identical except CF score.
+        """Higher CF score lifts a candidate when query scores are tied."""
         profile = _profile(cf={20: 1.0, 10: 0.0})
         cands = [
-            _candidate(10, 0.5, popularity=0.5, trending=0.5),
-            _candidate(20, 0.5, popularity=0.5, trending=0.5),
+            _candidate(10, 0.5),
+            _candidate(20, 0.5),
         ]
         result = ranker.rank(_candidate_set(cands, profile=profile))
         assert result.items[0].video_id == 20
-
-    def test_query_caption_similarity_boosts_candidates(self) -> None:
-        """Direct query↔caption cosine similarity lifts semantically closer items."""
-        # 4-dim caption embeddings aligned to video IDs [10, 20].
-        # vid 10 embedding is close to the query; vid 20 is orthogonal.
-        cap_embs = np.array([
-            [1.0, 0.0, 0.0, 0.0],  # vid 10 — aligned with query
-            [0.0, 0.0, 0.0, 1.0],  # vid 20 — orthogonal to query
-        ], dtype=np.float64)
-        cap_ids = np.array([10, 20])
-        als_factors = np.eye(4, dtype=np.float64)[:2]
-        als_ids = np.array([10, 20])
-
-        ranker = QCSARRanker(
-            als_factors, als_ids,
-            caption_embeddings=cap_embs, caption_video_ids=cap_ids,
-            top_k=20,
-        )
-        # Both candidates have identical retrieval scores.
-        cands = [
-            _candidate(10, 0.5, popularity=0.5, trending=0.5),
-            _candidate(20, 0.5, popularity=0.5, trending=0.5),
-        ]
-        # Query embedding close to vid 10's caption.
-        cs = _candidate_set(cands, query_embedding=[1.0, 0.0, 0.0, 0.0])
-        result = ranker.rank(cs)
-        assert result.items[0].video_id == 10
 
     def test_category_affinity_boosts_preferred_categories(
         self, ranker: QCSARRanker,
     ) -> None:
-        """Videos in the user's preferred categories get a boost."""
-        # User watches 80% cat 2, 20% cat 1.  Both candidates identical
-        # except category — vid 20 (cat 2) should rank higher.
-        profile = _profile(cf={}, social={})
-        profile.category_distribution = {2: 0.8, 1: 0.2}
+        """Videos in the user's preferred categories rank higher."""
+        profile = _profile(cf={}, social={}, cat_dist={2: 0.8, 1: 0.2})
         cands = [
-            _candidate(10, 0.5, cat=1, popularity=0.5, trending=0.5),
-            _candidate(20, 0.5, cat=2, popularity=0.5, trending=0.5),
+            _candidate(10, 0.5, cat=1),
+            _candidate(20, 0.5, cat=2),
         ]
         result = ranker.rank(_candidate_set(cands, profile=profile))
         assert result.items[0].video_id == 20
+
+    def test_social_scores_boost_candidates(self, ranker: QCSARRanker) -> None:
+        """Higher social (friends') scores lift a candidate."""
+        profile = _profile(social={20: 1.0, 10: 0.0})
+        cands = [
+            _candidate(10, 0.5),
+            _candidate(20, 0.5),
+        ]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        assert result.items[0].video_id == 20
+
+
+# ---------------------------------------------------------------------------
+# Tests — short-term signals
+# ---------------------------------------------------------------------------
+
+class TestShortTermSignals:
+    """Short-term personal signals: Markov, item-item sim, session vector."""
 
     def test_markov_transition_scores_used(self, ranker: QCSARRanker) -> None:
-        # No recent videos → Stage 5 is a no-op, so only Stage 4 matters.
         profile = _profile(
+            recent=[],  # empty recent → item-item sims are zero
             next_item={20: 1.0, 30: 0.0},
         )
-        # Give session_context without recent_video_ids so Stage 5 skips.
-        profile.session_context = SessionContext(
-            recent_video_ids=[],
-            next_item_scores={20: 1.0, 30: 0.0},
-        )
         cands = [
-            _candidate(20, 0.5, popularity=0.5, trending=0.5),
-            _candidate(30, 0.5, popularity=0.5, trending=0.5),
+            _candidate(20, 0.5),
+            _candidate(30, 0.5),
         ]
         result = ranker.rank(_candidate_set(cands, profile=profile))
         assert result.items[0].video_id == 20
-
-
-class TestStage5ItemItem:
-    """Stage 5: item-item similarity re-ranking."""
 
     def test_item_similar_to_recent_gets_boosted(
         self, item_factors: tuple[np.ndarray, np.ndarray],
     ) -> None:
+        """Candidate closer to recent videos in ALS space ranks higher."""
         factors, ids = item_factors
         ranker = QCSARRanker(factors, ids, top_k=20)
 
         # Recent video: 10 (factor [1,0,0,0]).
-        # Candidate 30 (factor [1,1,0,0]) is more similar than 40 ([0,0,1,0]).
-        # Give them identical Stage 4 scores so Stage 5 decides.
+        # vid 30 ([1,1,0,0]) is closer than vid 40 ([0,0,1,0]).
         profile = _profile(
             recent=[10],
             session_vector=[1.0, 0.0, 0.0, 0.0],
         )
         cands = [
-            _candidate(30, 0.5, popularity=0.5, trending=0.5),
-            _candidate(40, 0.5, popularity=0.5, trending=0.5),
+            _candidate(30, 0.5),
+            _candidate(40, 0.5),
         ]
         result = ranker.rank(_candidate_set(cands, profile=profile))
         assert result.items[0].video_id == 30
 
-    def test_skips_when_no_session_context(self, ranker: QCSARRanker) -> None:
-        """Stage 5 is a no-op when there are no recent videos."""
-        profile = _profile()  # no recent_video_ids → session_context is None
+    def test_no_session_context_means_no_short_term(
+        self, ranker: QCSARRanker,
+    ) -> None:
+        """Without session context, short-term composite is zero."""
+        profile = _profile()  # no recent → session_context is None
         cands = [_candidate(10, 0.9), _candidate(20, 0.7)]
         result = ranker.rank(_candidate_set(cands, profile=profile))
-        # Should still rank by Stage 4 (query relevance dominates)
+        # Query relevance decides (10 has higher retrieval score)
         assert result.items[0].video_id == 10
 
 
-class TestStage6Constraints:
-    """Stage 6: demotion, diversity, negative constraints."""
+# ---------------------------------------------------------------------------
+# Tests — alpha blending
+# ---------------------------------------------------------------------------
 
-    def test_seen_videos_are_demoted(self, ranker: QCSARRanker) -> None:
-        # vid 10 (seen) has slightly higher query score than vid 20 (unseen).
-        # Extra anchors reduce rank spacing so the 0.5× demotion flips ordering.
-        # With 6 candidates, rank-normalised values are 1.0, 0.8, 0.6, 0.4, 0.2, 0.0
-        # so the gap between vid 10 (1.0) and vid 20 (0.8) is small enough.
-        cands = [
-            _candidate(10, 0.91, seen=1.0, popularity=0.5, trending=0.5),
-            _candidate(20, 0.90, seen=0.0, popularity=0.5, trending=0.5),
-            _candidate(30, 0.50, seen=0.0, popularity=0.5, trending=0.5),
-            _candidate(40, 0.30, seen=0.0, popularity=0.5, trending=0.5),
-            _candidate(50, 0.20, seen=0.0, popularity=0.5, trending=0.5),
-            _candidate(60, 0.10, seen=0.0, popularity=0.5, trending=0.5),
-        ]
-        result = ranker.rank(_candidate_set(cands))
-        # vid 10 seen → score × 0.5, which drops it below vid 20.
-        assert result.items[0].video_id == 20
+class TestAlphaBlending:
+    """The α parameter controls the long-term / short-term balance."""
 
-    def test_category_diversity_penalises_repeats(
-        self, ranker: QCSARRanker,
-    ) -> None:
-        # 4 same-category candidates + 1 different-category + 1 anchor.
-        # The anchor creates a normalization range. Same-cat candidates have
-        # similar scores; the 15% diversity penalty on repeated categories
-        # should push vid 50 (cat 2) above some penalised cat-1 entries.
-        cands = [
-            _candidate(10, 0.90, cat=1, popularity=0.5, trending=0.5),
-            _candidate(20, 0.89, cat=1, popularity=0.5, trending=0.5),
-            _candidate(30, 0.88, cat=1, popularity=0.5, trending=0.5),
-            _candidate(40, 0.87, cat=1, popularity=0.5, trending=0.5),
-            _candidate(50, 0.87, cat=2, popularity=0.5, trending=0.5),
-            _candidate(60, 0.10, cat=3, popularity=0.5, trending=0.5),  # anchor
-        ]
-        result = ranker.rank(_candidate_set(cands))
-        video_ids = [item.video_id for item in result.items]
-        # vid 50 (cat 2, same score as 40) has no diversity penalty.
-        # vid 40 (cat 1, same score) has repeated-category penalty.
-        # So vid 50 should rank above vid 40.
-        assert video_ids.index(50) < video_ids.index(40)
-
-    def test_negative_constraints_penalise_duration(
+    def test_alpha_one_ignores_short_term(
         self, item_factors: tuple[np.ndarray, np.ndarray],
     ) -> None:
+        """With α=1.0, short-term signals have no effect."""
         factors, ids = item_factors
-        ranker = QCSARRanker(factors, ids, top_k=20)
+        ranker = QCSARRanker(factors, ids, alpha=1.0, top_k=20)
 
-        intent = _query_intent(negative_constraints=["too long"])
-        # vid 10 has slightly higher score but poor dur_fit → penalised.
-        # With rank normalization, need ≥11 candidates so spacing ≤0.1 —
-        # the 0.8× penalty then flips adjacent items.
-        cands = [
-            _candidate(10, 0.91, dur_fit=0.1, popularity=0.5, trending=0.5),
-            _candidate(20, 0.90, dur_fit=0.9, popularity=0.5, trending=0.5),
-        ] + [
-            _candidate(100 + i, 0.10 + i * 0.08, dur_fit=0.5,
-                       popularity=0.5, trending=0.5)
-            for i in range(9)  # 9 anchors → 11 total → spacing 0.1
-        ]
-        result = ranker.rank(_candidate_set(cands, intent=intent))
+        # Strong short-term signal for vid 40, strong long-term for vid 20.
+        profile = _profile(
+            cf={20: 1.0, 40: 0.0},
+            recent=[40],  # makes vid 40 similar in short-term
+            session_vector=[0.0, 0.0, 1.0, 0.0],  # points toward vid 40
+            next_item={40: 1.0},
+        )
+        cands = [_candidate(20, 0.5), _candidate(40, 0.5)]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        # α=1 → pure long-term → CF favours vid 20
         assert result.items[0].video_id == 20
+
+    def test_alpha_zero_ignores_long_term(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        """With α=0.0, long-term signals have no effect."""
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, alpha=0.0, top_k=20)
+
+        # Strong long-term for vid 20, strong short-term for vid 40.
+        profile = _profile(
+            cf={20: 1.0, 40: 0.0},
+            recent=[40],
+            session_vector=[0.0, 0.0, 1.0, 0.0],
+            next_item={40: 1.0},
+        )
+        cands = [_candidate(20, 0.5), _candidate(40, 0.5)]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        # α=0 → pure short-term → session/markov favour vid 40
+        assert result.items[0].video_id == 40
+
+    def test_w_query_one_ignores_personal(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        """With w_query=1.0, personal signals don't matter."""
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, w_query=1.0, top_k=20)
+
+        # Strong CF for vid 20 but vid 10 has higher query score.
+        profile = _profile(cf={20: 1.0, 10: 0.0})
+        cands = [_candidate(10, 0.9), _candidate(20, 0.5)]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        # w_query=1 → pure query relevance → vid 10 wins
+        assert result.items[0].video_id == 10

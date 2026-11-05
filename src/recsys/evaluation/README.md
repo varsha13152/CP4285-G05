@@ -9,7 +9,7 @@ Shared metrics, plus the test sets and method for evaluating the pipeline offlin
 | Precision@K | `precision_at_k` | Fraction of top-k that are relevant |
 | Recall@K | `recall_at_k` | Fraction of relevant items in top-k |
 | NDCG@K | `ndcg_at_k` | Ranking quality with graded relevance |
-| MRR | `mrr` | 1/rank of first relevant item |
+| MRR@k | `mrr(ranked, gt, k=3)` | 1/rank of first relevant item in top-k |
 | Coverage | `coverage` | Fraction of catalog recommended |
 
 ## Usage
@@ -86,7 +86,7 @@ Metrics only **grade** the output. Per case, the pipeline runs once, searching t
 | Question | Answer key | Metric | Baseline for lift | Role |
 |---|---|---|---|---|
 | Stage 3: are the right kinds of videos in the pool? | on-topic videos (category or sub-category) | Recall@100 | — | retrieval diagnostic |
-| **Metric 1, query relevance**: does the list answer what was searched? | `answer_video_ids` (binary, same for every user) | **P@5, MRR** | `anonymous` | **guardrail**: must hold |
+| **Metric 1, query relevance**: does the list answer what was searched? | `answer_video_ids` (binary, same for every user) | **P@5, MRR@3** | `anonymous` | **guardrail**: must hold |
 | **Metric 2, personal preference**: among on-topic videos, are the ones *this user* enjoys near the top? | this user's `small_matrix` `watch_ratio`: on-topic → capped at 5, off-topic → 0, no label → skipped | **nDCG@5** | `anonymous*` (the anonymous ranking graded against the same user) | **target**: should rise |
 
 **Personalisation works if metric 2 rises while metric 1 holds.**
@@ -96,7 +96,7 @@ Metrics only **grade** the output. Per case, the pipeline runs once, searching t
 Key decisions and why:
 - **Two metrics, not one.** Answers are caption-based (they reward text similarity) and identical for every user. Only 6% of (query, user) pairs have the user loving an answer video. Grading personalisation by answers would favour plain lookup, so personalisation is graded on watch behaviour.
 - **@5:** real searches show ~6 results and get ~1 click.
-- **MRR for metric 1:** answer labels are binary and incomplete, so graded nDCG adds nothing.
+- **MRR@3 for metric 1:** answer labels are binary and incomplete, so graded nDCG adds nothing. Cutoff at 3 matches real search behaviour (~1 click in ~6 results).
 - **nDCG for metric 2:** `small_matrix` is fully observed, so each user's ideal order is actually known.
 - **No secondary metrics:** nDCG@10 and MRR-on-loved were only robustness checks; add them back if a result is in doubt.
 - **Named queries (e.g. "ju jingyi") are graded on metric 1 only.** Their category (all celebrities) is far too broad to stand in for the query.
@@ -115,26 +115,70 @@ Personal labels exist only for `small_matrix` videos: 33% of the catalogue, and 
   - A temporal hold-out on `big_matrix` is the future fix for the long tail.
 - **List length:** with `--cases` the ranker returns 100 results (the first 20 are unchanged) so enough labelled videos remain to grade.
 
-## Latest results (v3 test split, 2026-10-30)
+## Ranking formula (simplified)
 
-- **Stage 3**, gold intents, N = 100:
+The ranker was simplified from a 14-knob three-stage cascade to a single α-controlled blend:
+
+```
+personal = α × long_term + (1 − α) × short_term
+score    = w_query × query_relevance + (1 − w_query) × personal
+```
+
+| Composite | Sub-signals (each rank-normalised, then averaged) |
+|---|---|
+| **Long-term** | CF neighbour scores, category affinity, social scores |
+| **Short-term** | Markov transitions, ALS item-item sim, caption sim, session vector sim |
+
+- `alpha` (0–1): the variable of interest. 1.0 = pure long-term, 0.0 = pure short-term.
+- `w_query` (default 0.5): fixed weight on query relevance vs personal signals.
+- MRR is now **MRR@3** (returns 0 if no answer in top 3).
+- Removed from old ranker: popularity/trending, direct query↔caption similarity, Stage 5 item-item cascade, Stage 6 (diversity window, seen-video demotion, negative constraint penalties).
+
+### How to run
+
+```bash
+# Single α evaluation
+python scripts/evaluate_ranking.py --query-set v3 --split test --cases --alpha 0.5
+# α sweep (caches Stages 1-3 once, re-ranks cheaply)
+python scripts/sweep_alpha.py --alphas 0.0 0.25 0.5 0.75 1.0
+# Tune α + w_query on dev split
+python scripts/tune_weights.py --query-set v3
+```
+
+## Latest results (v3 test split, simplified ranker, α=0.5)
+
+- **Stage 3**, gold intents, N = 100 (unchanged):
   - hybrid: P@5 0.111, MRR 0.322;
   - semantic: 0.064 / 0.189;
   - category-only: 0.012 / 0.048.
-- **Stage 4** session cases (`results/ranking_eval_v3_test_cases.txt`):
+- **Ranking** session cases, α=0.5, w_query=0.5 (`results/ranking_eval_v3_simplified.txt`):
 
-| Condition | P@5 | MRR | nDCG@5 (personal) |
-|---|---|---|---|
-| anonymous / anonymous* | 0.049 | 0.128 | 0.151 |
-| none (history only) | 0.060 | 0.165 | 0.153 |
-| related recent viewing | 0.029 | 0.109 | 0.149 |
-| unrelated recent viewing | 0.040 | 0.126 | 0.156 |
+**Metric 1 — query relevance (guardrail):**
 
-**Findings:**
-- User history slightly improves query relevance but doesn't measurably improve personal preference (nDCG@5 lifts within ±0.005, i.e. noise).
-- Related recent viewing pulls results **off-query** without making them more personal.
-- Session signals also push unlabelled long-tail videos into the top 5 (`judged@5` falls from 0.59 to 0.30).
-- The Stage 4/5 session weights need re-tuning against these cases.
+| Condition | n | P@5 | MRR@3 | lift P@5 / MRR@3 |
+|---|---|---|---|---|
+| anonymous (baseline) | 81 | 0.0593 | 0.1296 | — |
+| none (history only) | 405 | 0.0464 | 0.0930 | −0.013 / −0.037 |
+| related | 405 | 0.0351 | 0.0819 | −0.024 / −0.048 |
+| unrelated | 405 | 0.0415 | 0.1025 | −0.018 / −0.027 |
+
+**Metric 2 — personal preference (target):**
+
+| Condition | n | nDCG@5 | judged@5 | lift nDCG@5 |
+|---|---|---|---|---|
+| anonymous* (baseline) | 185 | 0.1646 | 0.168 | — |
+| none | 185 | 0.1775 | 0.061 | +0.013 |
+| related | 185 | 0.1617 | 0.071 | −0.003 |
+| unrelated | 185 | 0.1696 | 0.087 | +0.005 |
+
+Realistic blend: P@5=0.046 · MRR@3=0.093 · nDCG@5=0.177.
+
+**Findings (α=0.5):**
+- Long-term modelling lifts nDCG@5 by +0.013 in the `none` condition (the clearest signal of personalisation helping).
+- Query relevance (MRR@3) drops across all personalised conditions — the α=0.5 default gives too much weight to personal signals, pulling results off-query.
+- Related recent viewing continues to hurt both metrics — over-personalisation from session context.
+- `judged@5` drops sharply (0.17 → 0.06–0.09) when personal signals are active, indicating personal signals promote long-tail videos outside `small_matrix`.
+- **Next: sweep α** to find the balance that preserves query relevance while capturing the nDCG@5 lift.
 
 ## Known limitations
 - No real search judgements: `watch_ratio` shows liking in the feed, not search satisfaction, so metric 2 is a proxy.
@@ -145,10 +189,9 @@ Personal labels exist only for `small_matrix` videos: 33% of the catalogue, and 
 - Session cases pair **real** users and real `big_matrix` sessions with **synthetic** queries: these users never actually ran these searches.
 - KuaiSAR statistics (2023) are applied to KuaiRec (2020) via a hand-written category mapping.
 - Not represented: photo-set, account and uncategorised searches. Refinement queries are graded standalone.
-- `tune_weights.py` still uses the leaky context.
 
 ## Next steps
-1. Re-tune `tune_weights.py` on the leak-free dev cases (optimise metric 2, keep metric 1 as a constraint).
+1. Run α sweep across 0.0–1.0 and find optimal balance for MRR@3 + nDCG@5.
 2. Pool-judge the top results to complete the answer lists.
 3. Temporal hold-out on `big_matrix` to grade long-tail personalisation.
 

@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Offline evaluation of the full QCSAR pipeline (Stages 1-6) against
-``small_matrix.csv`` ground truth.
+"""Offline evaluation of the QCSAR pipeline against ``small_matrix.csv``
+ground truth, using the simplified α-blended ranker.
 
-Uses **query-aware** ground truth: a user's video is relevant only if
-(a) watch_ratio >= threshold AND (b) the video's categories overlap with
-the query's expected topics. This measures "did we find on-topic videos
-the user enjoyed" rather than "did we find all videos the user enjoyed."
+Ranking formula:
+    personal = α × long_term + (1 − α) × short_term
+    score    = w_query × query_relevance + (1 − w_query) × personal
 
 Usage:
-    python scripts/evaluate_ranking.py
-    python scripts/evaluate_ranking.py --max-users 20 --k 5 10 20
-    python scripts/evaluate_ranking.py --verbose --relevance-threshold 0.5
-    python scripts/evaluate_ranking.py --query-set v3 --split test --cases
+    python scripts/evaluate_ranking.py --alpha 0.5
+    python scripts/evaluate_ranking.py --alpha 0.7 --query-set v3 --split test --cases
+    python scripts/evaluate_ranking.py --alpha 0.0 --w-query 0.5 --cases --query-set v3
 
 Without ``--cases``, each user's "recent" videos are their 5 most-watched
 small_matrix videos, which are also the ground truth (a leak, kept only so
@@ -77,6 +75,10 @@ def main() -> None:
     ap.add_argument("--split", default="all", choices=["dev", "test", "all"])
     ap.add_argument("--cases", action="store_true",
                     help="v3 only: leak-free session cases, metrics per condition")
+    ap.add_argument("--alpha", type=float, default=0.5,
+                    help="Long-term / short-term ratio (0=pure ST, 1=pure LT; default 0.5)")
+    ap.add_argument("--w-query", type=float, default=0.5,
+                    help="Query relevance weight (default 0.5)")
     ap.add_argument("--out", default=None,
                     help="Output file (default: results/ranking_eval_{date}.txt)")
     args = ap.parse_args()
@@ -117,6 +119,8 @@ def main() -> None:
     ranker_kwargs: dict = dict(
         item_factors=profiler.item_factors,
         item_ids=profiler.item_ids,
+        alpha=args.alpha,
+        w_query=args.w_query,
     )
     emb_path = pathlib.Path(args.embeddings)
     if emb_path.exists():
@@ -125,10 +129,10 @@ def main() -> None:
         ranker_kwargs["caption_video_ids"] = emb_data["video_ids"]
         print(f"  Caption embeddings loaded ({emb_data['embeddings'].shape})")
     if args.cases:
-        # longer list so the condensed (labelled-only) list has enough items to grade;
-        # the ranker cuts after diversifying, so the first 20 results are unchanged
+        # longer list so the condensed (labelled-only) list has enough items to grade
         ranker_kwargs["top_k"] = 100
     ranker = QCSARRanker(**ranker_kwargs)
+    print(f"  Ranker: α={args.alpha}, w_query={args.w_query}")
 
     pipeline = RecommendationPipeline(
         parser=QueryParser(embedder=BgeM3Embedder()),
@@ -219,7 +223,7 @@ def main() -> None:
                 prec_acc[k].append(precision_at_k(ranked, relevant_set, k))
                 rec_acc[k].append(recall_at_k(ranked, relevant_set, k))
                 ndcg_acc[k].append(ndcg_at_k(ranked, capped_gt, k))
-            mrr_acc.append(mrr(ranked, relevant_set))
+            mrr_acc.append(mrr(ranked, relevant_set, k=3))
 
         elapsed = time.time() - q_t0
         if args.verbose and q_pairs:
@@ -260,7 +264,7 @@ def main() -> None:
         p(f"  @{k:>2d}  precision={avg_p:.4f}  recall={avg_r:.4f}  NDCG={avg_n:.4f}")
 
     avg_mrr = sum(mrr_acc) / len(mrr_acc)
-    p(f"\n  MRR = {avg_mrr:.4f}")
+    p(f"\n  MRR@3 = {avg_mrr:.4f}")
     cov = coverage(all_ranked_lists, total_items)
     p(f"  Coverage = {cov:.4f} ({int(cov * total_items)}/{total_items} items)")
 
@@ -293,12 +297,12 @@ def _evaluate_cases(pipeline, queries, user_gt, vid_cats, args) -> None:
     for c in SESSION_CASES_V3:
         cases_by_q.setdefault(c["query_id"], []).append(c)
     conds = ["anonymous", "anonymous*", "none", "related", "unrelated"]
-    m1 = {c: {"P@5": [], "MRR": []} for c in conds}
+    m1 = {c: {"P@5": [], "MRR@3": []} for c in conds}
     m2 = {c: {"nDCG@5": [], "judged@5": []} for c in conds}
 
     def query_relevance(cond, ranked, answers):
         m1[cond]["P@5"].append(precision_at_k(ranked, answers, 5))
-        m1[cond]["MRR"].append(mrr(ranked, answers))
+        m1[cond]["MRR@3"].append(mrr(ranked, answers, k=3))
 
     def personal(cond, ranked, labels, topics):
         rel = {v: min(wr, WATCH_RATIO_CAP) if vid_cats.get(v, set()) & topics else 0.0
@@ -351,12 +355,12 @@ def _evaluate_cases(pipeline, queries, user_gt, vid_cats, args) -> None:
     p(f" QCSAR ranking — v3 session cases ({args.split} split, {args.lang})")
     p("=" * 78)
     p("  Metric 1 — query relevance (answer_video_ids; guardrail, baseline = anonymous)")
-    p(f"  {'condition':<12}{'n':>6}{'P@5':>9}{'MRR':>9}   lift P@5 / MRR")
+    p(f"  {'condition':<12}{'n':>6}{'P@5':>9}{'MRR@3':>9}   lift P@5 / MRR@3")
     for c in ["anonymous", "none", "related", "unrelated"]:
-        row = f"  {c:<12}{len(m1[c]['MRR']):>6}{avg(m1, c, 'P@5'):>9.4f}{avg(m1, c, 'MRR'):>9.4f}"
+        row = f"  {c:<12}{len(m1[c]['MRR@3']):>6}{avg(m1, c, 'P@5'):>9.4f}{avg(m1, c, 'MRR@3'):>9.4f}"
         if c in CONDITION_MIX:
             row += "   " + " / ".join(f"{avg(m1, c, m) - avg(m1, 'anonymous', m):+.4f}"
-                                       for m in ("P@5", "MRR"))
+                                       for m in ("P@5", "MRR@3"))
         p(row)
     p()
     p("  Metric 2 — personal preference (user's small_matrix watch_ratio, condensed list;")
@@ -370,7 +374,7 @@ def _evaluate_cases(pipeline, queries, user_gt, vid_cats, args) -> None:
         p(row)
     p(f"\n  realistic blend (KuaiSAR mix {CONDITION_MIX}):")
     p(f"    P@5={sum(w * avg(m1, c, 'P@5') for c, w in CONDITION_MIX.items()):.4f}  "
-      f"MRR={sum(w * avg(m1, c, 'MRR') for c, w in CONDITION_MIX.items()):.4f}  "
+      f"MRR@3={sum(w * avg(m1, c, 'MRR@3') for c, w in CONDITION_MIX.items()):.4f}  "
       f"nDCG@5={sum(w * avg(m2, c, 'nDCG@5') for c, w in CONDITION_MIX.items()):.4f}")
     p("  Personalisation works if metric 2 rises vs anonymous* while metric 1 holds.")
     p("  Metric 2 only sees the ~33% of videos in small_matrix (the popular head).")
