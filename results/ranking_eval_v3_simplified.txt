@@ -1,0 +1,23 @@
+
+==============================================================================
+ QCSAR ranking — v3 session cases (test split, en)
+==============================================================================
+  Metric 1 — query relevance (answer_video_ids; guardrail, baseline = anonymous)
+  condition        n      P@5    MRR@3   lift P@5 / MRR@3
+  anonymous       81   0.0593   0.1296
+  none           405   0.0464   0.0930   -0.0128 / -0.0366
+  related        405   0.0351   0.0819   -0.0242 / -0.0477
+  unrelated      405   0.0415   0.1025   -0.0178 / -0.0272
+
+  Metric 2 — personal preference (user's small_matrix watch_ratio, condensed list;
+  non-named queries; target, baseline = anonymous*)
+  condition        n   nDCG@5  judged@5   lift nDCG@5
+  anonymous*     185   0.1646    0.1676
+  none           185   0.1775    0.0605   +0.0129
+  related        185   0.1617    0.0714   -0.0028
+  unrelated      185   0.1696    0.0865   +0.0050
+
+  realistic blend (KuaiSAR mix {'none': 0.95, 'related': 0.0211, 'unrelated': 0.0289}):
+    P@5=0.0460  MRR@3=0.0930  nDCG@5=0.1769
+  Personalisation works if metric 2 rises vs anonymous* while metric 1 holds.
+  Metric 2 only sees the ~33% of videos in small_matrix (the popular head).

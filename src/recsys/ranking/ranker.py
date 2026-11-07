@@ -1,13 +1,28 @@
-"""QCSARRanker — three-stage cascade: initial ranking, item-item re-ranking,
-and constraint enforcement.
+"""Simplified QCSARRanker — α-blended long-term / short-term personalisation.
 
-Implements the ``Ranker`` protocol from ``recsys.pipeline.pipeline``::
+Replaces the original three-stage cascade (Stages 4-6) with a single scoring
+stage whose only tuneable axis is the long-term / short-term balance::
 
-    Search Query  →  content-based (Stage 3 score)
-                  →  + CF / social / Markov (Stage 4)
-                  →  + item-item similarity re-ranking (Stage 5)
-                  →  + diversity / demotion / top-k (Stage 6)
-                  →  RankedList
+    When both LT and ST composites are active:
+        personal = α × long_term + (1 − α) × short_term
+    When only one composite is active (e.g. no session → ST dead):
+        personal = the active composite (full budget)
+    score = w_query × query_relevance + (1 − w_query) × personal
+
+This ensures that α only controls the LT/ST *blend*, and users without
+a session still receive the full personalisation budget (not α × LT).
+
+Long-term composite (mean of rank-normalised sub-signals):
+    • CF neighbour scores  (kNN collaborative filtering)
+    • Category affinity    (user's habitual categories)
+    • Social scores        (friends' watch ratios)
+
+Short-term composite (mean of rank-normalised sub-signals):
+    • Markov transition P(next | last watched)
+    • ALS item-item similarity to recent videos
+    • Caption embedding similarity to recent videos
+
+Anonymous users (no profile) are ranked by query relevance alone.
 """
 
 from __future__ import annotations
@@ -31,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 class QCSARRanker:
-    """Stages 4-6 ranker for the QCSAR pipeline.
+    """Single-stage ranker that blends long-term and short-term signals.
 
     Parameters
     ----------
@@ -46,17 +61,13 @@ class QCSARRanker:
         from ``data/processed/caption_embeddings.npz``.
     caption_video_ids : np.ndarray | None
         Video IDs aligned to rows of *caption_embeddings*.
-    w_query, w_query_sem, w_popularity, w_cf, w_social, w_session_markov,
-    w_cat_affinity : float
-        Stage 4 signal weights (should sum to 1.0).
-    w_item_als, w_item_caption, w_session_vector : float
-        Stage 5 item-item signal weights (should sum to 1.0).
-    stage5_alpha : float
-        Mixing ratio: ``alpha * stage4 + (1 - alpha) * stage5``.
-    seen_demotion : float
-        Multiplicative penalty for already-seen videos (Stage 6).
-    diversity_window : int
-        Sliding window size for category-diversity enforcement (Stage 6).
+    alpha : float
+        Long-term / short-term ratio.  ``1.0`` = pure long-term,
+        ``0.0`` = pure short-term.  Default ``0.5``.
+    w_query : float
+        Weight on query relevance vs personal signals.
+        ``1.0`` = rank by query relevance only (ignore personal);
+        ``0.0`` = rank by personal signals only.  Default ``0.5``.
     top_k : int
         Maximum items in the final ``RankedList``.
     """
@@ -68,24 +79,15 @@ class QCSARRanker:
         caption_embeddings: np.ndarray | None = None,
         caption_video_ids: np.ndarray | None = None,
         *,
-        # Stage 4 weights (tuned via scripts/tune_weights.py)
-        w_query: float = 0.50,
-        w_query_sem: float = 0.05,
-        w_popularity: float = 0.20,
-        w_cf: float = 0.05,
-        w_cat_affinity: float = 0.05,
-        w_social: float = 0.075,
-        w_session_markov: float = 0.075,
-        # Stage 5 weights
-        w_item_als: float = 0.50,
-        w_item_caption: float = 0.30,
-        w_session_vector: float = 0.20,
-        stage5_alpha: float = 0.70,
-        # Stage 6 knobs
-        seen_demotion: float = 0.5,
-        diversity_window: int = 3,
+        alpha: float = 0.5,
+        w_query: float = 0.5,
         top_k: int = 20,
     ) -> None:
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+        if not 0.0 <= w_query <= 1.0:
+            raise ValueError(f"w_query must be in [0, 1], got {w_query}")
+
         # L2-normalise ALS factors for cosine similarity via dot product.
         norms = np.linalg.norm(item_factors, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1.0, norms)  # avoid div-by-zero
@@ -104,24 +106,8 @@ class QCSARRanker:
                 int(vid): i for i, vid in enumerate(caption_video_ids)
             }
 
-        # Stage 4
+        self._alpha = alpha
         self._w_query = w_query
-        self._w_query_sem = w_query_sem
-        self._w_pop = w_popularity
-        self._w_cf = w_cf
-        self._w_cat_aff = w_cat_affinity
-        self._w_social = w_social
-        self._w_markov = w_session_markov
-
-        # Stage 5
-        self._w_item_als = w_item_als
-        self._w_item_cap = w_item_caption
-        self._w_sess_vec = w_session_vector
-        self._alpha = stage5_alpha
-
-        # Stage 6
-        self._seen_demotion = seen_demotion
-        self._div_window = diversity_window
         self._top_k = top_k
 
     # ------------------------------------------------------------------
@@ -129,7 +115,7 @@ class QCSARRanker:
     # ------------------------------------------------------------------
 
     def rank(self, candidates: CandidateSet) -> RankedList:
-        """Run the three-stage ranking cascade and return a ``RankedList``."""
+        """Score and rank candidates using α-blended personalisation."""
         if not candidates.candidates:
             return RankedList(
                 user_id=candidates.user_id,
@@ -138,57 +124,18 @@ class QCSARRanker:
                 intent_type=candidates.request.query_intent.intent_type,
             )
 
-        profile = candidates.request.engagement_profile
-        scored = self._stage4_initial_rank(candidates)
-        scored = self._stage5_rerank(scored, profile)
-        return self._stage6_constrain(scored, candidates)
-
-    # ------------------------------------------------------------------
-    # Stage 4 — weighted multi-signal scoring
-    # ------------------------------------------------------------------
-
-    def _stage4_initial_rank(
-        self,
-        candidates: CandidateSet,
-    ) -> list[tuple[Candidate, float]]:
         cands = candidates.candidates
         profile = candidates.request.engagement_profile
         n = len(cands)
 
-        # 1. Query relevance (from Stage 3 composite score)
+        # --- Query relevance (from Stage 3 composite score) ---
         query_arr = np.array([c.score for c in cands], dtype=np.float64)
+        query_n = self._rank_normalize(query_arr)
 
-        # 2. Direct query↔caption semantic similarity
-        qsem_arr = np.zeros(n, dtype=np.float64)
-        query_emb = candidates.request.query_intent.query_embedding
-        if query_emb is not None and self._emb is not None and self._vid_to_emb is not None:
-            qv = np.array(query_emb, dtype=np.float64)
-            qv_norm = np.linalg.norm(qv)
-            if qv_norm > 0:
-                qv = qv / qv_norm
-                for i, c in enumerate(cands):
-                    row = self._vid_to_emb.get(c.video_id, -1)
-                    if row != -1:
-                        val = float(self._emb[row] @ qv)
-                        if np.isfinite(val):
-                            qsem_arr[i] = val
-
-        # 3. Popularity + trending
-        pop_arr = np.array(
-            [c.features.get("popularity", 0.0) for c in cands], dtype=np.float64,
-        )
-        trend_arr = np.array(
-            [c.features.get("trending", 0.0) for c in cands], dtype=np.float64,
-        )
-        pop_combined = (
-            0.7 * self._rank_normalize(pop_arr) + 0.3 * self._rank_normalize(trend_arr)
-        )
-
-        # 4-7. Personalisation signals (zero when anonymous)
+        # --- Long-term personal signals ---
         cf_arr = np.zeros(n, dtype=np.float64)
-        social_arr = np.zeros(n, dtype=np.float64)
-        markov_arr = np.zeros(n, dtype=np.float64)
         cat_aff_arr = np.zeros(n, dtype=np.float64)
+        social_arr = np.zeros(n, dtype=np.float64)
 
         if profile is not None:
             cf_scores = profile.cf_neighbour_scores
@@ -197,197 +144,115 @@ class QCSARRanker:
             for i, c in enumerate(cands):
                 cf_arr[i] = cf_scores.get(c.video_id, 0.0)
                 social_arr[i] = soc_scores.get(c.video_id, 0.0)
-                # User-category affinity: how much of the user's history is
-                # in this candidate's primary category.
                 if c.category_ids and cat_dist:
                     cat_aff_arr[i] = cat_dist.get(c.category_ids[0], 0.0)
 
+        long_term = self._active_mean([cf_arr, cat_aff_arr, social_arr])
+
+        # --- Short-term personal signals ---
+        markov_arr = np.zeros(n, dtype=np.float64)
+        als_sim_arr = np.zeros(n, dtype=np.float64)
+        cap_sim_arr = np.zeros(n, dtype=np.float64)
+
+        if profile is not None and profile.session_context is not None:
             ctx = profile.session_context
-            if ctx is not None:
-                nxt = ctx.next_item_scores
-                for i, c in enumerate(cands):
-                    markov_arr[i] = nxt.get(c.video_id, 0.0)
 
-        # Rank-based normalisation — robust to outliers
-        query_n = self._rank_normalize(query_arr)
-        qsem_n = self._rank_normalize(qsem_arr)
-        pop_n = self._rank_normalize(pop_combined)
-        cf_n = self._rank_normalize(cf_arr)
-        cat_aff_n = self._rank_normalize(cat_aff_arr)
-        social_n = self._rank_normalize(social_arr)
-        markov_n = self._rank_normalize(markov_arr)
+            # Markov transition P(next | last watched)
+            nxt = ctx.next_item_scores
+            for i, c in enumerate(cands):
+                markov_arr[i] = nxt.get(c.video_id, 0.0)
 
-        # Weighted blend
-        scores = (
-            self._w_query * query_n
-            + self._w_query_sem * qsem_n
-            + self._w_pop * pop_n
-            + self._w_cf * cf_n
-            + self._w_cat_aff * cat_aff_n
-            + self._w_social * social_n
-            + self._w_markov * markov_n
+            recent = ctx.recent_video_ids
+            if recent:
+                # ALS item-item similarity (mean of top-3 cosines to recent)
+                recent_rows = [
+                    self._vid_to_als[v] for v in recent if v in self._vid_to_als
+                ]
+                if recent_rows:
+                    recent_mat = self._als_normed[recent_rows]  # (n_recent, k)
+                    for i, c in enumerate(cands):
+                        row = self._vid_to_als.get(c.video_id, -1)
+                        if row == -1:
+                            continue
+                        sims = recent_mat @ self._als_normed[row]  # (n_recent,)
+                        top_k = min(3, len(sims))
+                        als_sim_arr[i] = float(np.sort(sims)[-top_k:].mean())
+
+                # Caption embedding similarity (optional)
+                if self._emb is not None and self._vid_to_emb is not None:
+                    recent_emb_rows = [
+                        self._vid_to_emb[v]
+                        for v in recent
+                        if v in self._vid_to_emb
+                    ]
+                    if recent_emb_rows:
+                        recent_emb = self._emb[recent_emb_rows]  # (n_recent, d)
+                        for i, c in enumerate(cands):
+                            erow = self._vid_to_emb.get(c.video_id, -1)
+                            if erow == -1:
+                                continue
+                            sims = recent_emb @ self._emb[erow]
+                            top_k = min(3, len(sims))
+                            cap_sim_arr[i] = float(np.sort(sims)[-top_k:].mean())
+
+        short_term = self._active_mean(
+            [markov_arr, als_sim_arr, cap_sim_arr],
         )
 
-        # Sort descending (stable)
+        # --- α-blended scoring (budget-normalised) ---
+        # When one composite is dead (all equal), the other gets the full
+        # personal budget.  α only controls the blend when both contribute.
+        lt_active = long_term.max() != long_term.min()
+        st_active = short_term.max() != short_term.min()
+
+        if lt_active and st_active:
+            personal = self._alpha * long_term + (1 - self._alpha) * short_term
+        elif lt_active:
+            personal = long_term
+        elif st_active:
+            personal = short_term
+        else:
+            personal = np.zeros(n, dtype=np.float64)
+
+        scores = self._w_query * query_n + (1 - self._w_query) * personal
+
+        # Sort descending (stable) and build RankedList
         order = np.argsort(-scores, kind="stable")
-        return [(cands[i], float(scores[i])) for i in order]
-
-    # ------------------------------------------------------------------
-    # Stage 5 — item-item similarity re-ranking
-    # ------------------------------------------------------------------
-
-    def _stage5_rerank(
-        self,
-        scored: list[tuple[Candidate, float]],
-        profile: EngagementProfile | None,
-    ) -> list[tuple[Candidate, float]]:
-        # Skip when there is no session context to compare against.
-        if profile is None or profile.session_context is None:
-            return scored
-        recent = profile.session_context.recent_video_ids
-        if not recent:
-            return scored
-
-        n = len(scored)
-
-        # --- ALS item-item similarity ---
-        # Gather normalised ALS vectors for recent videos.
-        recent_rows = [self._vid_to_als[v] for v in recent if v in self._vid_to_als]
-        als_sim = np.zeros(n, dtype=np.float64)
-        if recent_rows:
-            recent_mat = self._als_normed[recent_rows]  # (n_recent, k)
-            cand_rows = [
-                self._vid_to_als.get(c.video_id, -1) for c, _ in scored
-            ]
-            for i, row in enumerate(cand_rows):
-                if row == -1:
-                    continue
-                sims = recent_mat @ self._als_normed[row]  # (n_recent,)
-                # Mean of top-3 (or fewer)
-                top_k = min(3, len(sims))
-                als_sim[i] = float(np.sort(sims)[-top_k:].mean())
-
-        # --- Caption embedding similarity (optional) ---
-        cap_sim = np.zeros(n, dtype=np.float64)
-        has_cap = False
-        if self._emb is not None and self._vid_to_emb is not None:
-            recent_emb_rows = [
-                self._vid_to_emb[v] for v in recent if v in self._vid_to_emb
-            ]
-            if recent_emb_rows:
-                has_cap = True
-                recent_emb = self._emb[recent_emb_rows]  # (n_recent, 1024)
-                for i, (c, _) in enumerate(scored):
-                    erow = self._vid_to_emb.get(c.video_id, -1)
-                    if erow == -1:
-                        continue
-                    sims = recent_emb @ self._emb[erow]
-                    top_k = min(3, len(sims))
-                    cap_sim[i] = float(np.sort(sims)[-top_k:].mean())
-
-        # --- Session vector similarity ---
-        sess_vec = profile.session_context.session_vector
-        sess_sim = np.zeros(n, dtype=np.float64)
-        if sess_vec:
-            sv = np.array(sess_vec, dtype=np.float64)
-            sv_norm = np.linalg.norm(sv)
-            if sv_norm > 0:
-                sv = sv / sv_norm
-                for i, (c, _) in enumerate(scored):
-                    row = self._vid_to_als.get(c.video_id, -1)
-                    if row == -1:
-                        continue
-                    sess_sim[i] = float(self._als_normed[row] @ sv)
-
-        # Rank-based normalisation
-        als_n = self._rank_normalize(als_sim)
-        cap_n = self._rank_normalize(cap_sim)
-        sess_n = self._rank_normalize(sess_sim)
-
-        # Compute weights (redistribute caption weight when absent)
-        w_als = self._w_item_als
-        w_cap = self._w_item_cap if has_cap else 0.0
-        w_sess = self._w_sess_vec
-        if not has_cap:
-            total_other = w_als + w_sess
-            if total_other > 0:
-                w_als = w_als / total_other
-                w_sess = w_sess / total_other
-
-        stage5 = w_als * als_n + w_cap * cap_n + w_sess * sess_n
-
-        # Blend with Stage 4 scores
-        stage4_scores = np.array([s for _, s in scored], dtype=np.float64)
-        blended = self._alpha * stage4_scores + (1 - self._alpha) * stage5
-
-        order = np.argsort(-blended, kind="stable")
-        return [(scored[i][0], float(blended[i])) for i in order]
-
-    # ------------------------------------------------------------------
-    # Stage 6 — constraints, diversity, top-k
-    # ------------------------------------------------------------------
-
-    def _stage6_constrain(
-        self,
-        scored: list[tuple[Candidate, float]],
-        candidates: CandidateSet,
-    ) -> RankedList:
-        intent = candidates.request.query_intent
-
-        # 1. Negative constraint penalties (duration heuristics)
-        neg = intent.negative_constraints or []
-        has_long = any(kw in c.lower() for c in neg for kw in ("long", "lengthy"))
-        has_short = any(kw in c.lower() for c in neg for kw in ("short", "brief"))
-        adjusted: list[tuple[Candidate, float]] = []
-        for cand, score in scored:
-            dur_fit = cand.features.get("dur_fit", 1.0)
-            if has_long and dur_fit < 0.5:
-                score *= 0.8  # penalise long videos (low dur_fit ↔ poor match)
-            if has_short and dur_fit < 0.5:
-                score *= 0.8
-            adjusted.append((cand, score))
-
-        # 2. Seen-video demotion
-        for i, (cand, score) in enumerate(adjusted):
-            if cand.features.get("seen", 0.0) >= 1.0:
-                adjusted[i] = (cand, score * self._seen_demotion)
-
-        # 3. Category diversity (sliding-window penalty)
-        # Sort by score first so the window is applied in rank order.
-        adjusted.sort(key=lambda cs: (-cs[1], cs[0].video_id))
-        recent_cats: list[int] = []
-        diversified: list[tuple[Candidate, float]] = []
-        for cand, score in adjusted:
-            primary_cat = cand.category_ids[0] if cand.category_ids else -1
-            if primary_cat in recent_cats:
-                score *= 0.85  # 15 % diversity penalty
-            diversified.append((cand, score))
-            recent_cats.append(primary_cat)
-            if len(recent_cats) > self._div_window:
-                recent_cats.pop(0)
-
-        # 4. Final sort, top-k, and build RankedList
-        diversified.sort(key=lambda cs: (-cs[1], cs[0].video_id))
         items = [
             RankedItem(
-                video_id=c.video_id,
-                rank=i + 1,
-                score=s,
-                source=c.source,
-                category_ids=c.category_ids,
+                video_id=cands[i].video_id,
+                rank=rank + 1,
+                score=float(scores[i]),
+                source=cands[i].source,
+                category_ids=cands[i].category_ids,
             )
-            for i, (c, s) in enumerate(diversified[: self._top_k])
+            for rank, i in enumerate(order[: self._top_k])
         ]
         return RankedList(
             user_id=candidates.user_id,
             items=items,
-            num_candidates_considered=len(candidates.candidates),
-            intent_type=intent.intent_type,
+            num_candidates_considered=len(cands),
+            intent_type=candidates.request.query_intent.intent_type,
         )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _active_mean(self, raw_signals: list[np.ndarray]) -> np.ndarray:
+        """Mean of rank-normalised signals, excluding all-zero signals.
+
+        Signals where every candidate has the same value (e.g. social
+        scores when the user has no friends) are dropped so they don't
+        dilute the composite.  Returns zeros when *all* signals are dead.
+        """
+        normed = []
+        for arr in raw_signals:
+            if arr.max() != arr.min():  # has variance → active
+                normed.append(self._rank_normalize(arr))
+        if not normed:
+            return np.zeros_like(raw_signals[0])
+        return np.mean(normed, axis=0)
 
     @staticmethod
     def _rank_normalize(arr: np.ndarray) -> np.ndarray:
