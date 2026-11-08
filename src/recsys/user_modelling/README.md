@@ -33,6 +33,26 @@ KuaiRec's informative signal is the graded `watch_ratio`. ALS exploits it
 directly as confidence (`C_ui`); BPR would flatten it to binary preference and
 throw that signal away.
 
+### Alternative backend: LightFM (`backend="lightfm"`)
+ALS gives rarely-watched videos weak vectors: videos with < 50 viewers (29.6%
+of the catalogue) get vectors ~100× shorter than popular ones, and their
+nearest neighbours rarely share a category. LightFM builds each video vector
+as the **sum of feature vectors** (its id + its first/second/third-level
+caption category + its `topic_tag` tags used on ≥ 5 videos), so a rare video
+borrows from shared, well-trained features.
+
+* Same users × videos matrix and id maps as ALS; every view is a positive,
+  `sample_weight` = summed `watch_ratio` per pair clipped to `[0, 5]`.
+* Users: identity features only. `no_components=factors`, WARP loss,
+  `iterations` epochs, `random_state` seed. Biases are dropped, so `U · V`
+  stays comparable to ALS and popularity stays its own Stage 4 feature.
+* Item feature rows are normalised to sum to 1 (as `lightfm.data.Dataset` does).
+* Needs the optional extra: `pip install -e ".[lightfm]"`. On Windows the
+  1.17 package does not build on Python 3.12, and its negative sampler
+  crashes on Windows (a 32-bit `long` cast in `rand_r`), so a patched build is
+  needed there — see `results/RANKING_RESULTS.md` ("LightFM vs ALS").
+* Compared with ALS by `scripts/probe_long_term.py`.
+
 ### Sparsity
 Trained **observed-only** over a `scipy` CSR matrix — no `fillna(0)`
 densification. The fully-observed `small_matrix` is intentionally **not** touched
@@ -98,20 +118,25 @@ Factors are comparable **only within one training run**.
 
 | Param | Default | Notes |
 |-------|---------|-------|
+| `backend` | `"als"` | `"als"` (implicit ALS) or `"lightfm"` (content-aware MF, see above). Both fill the same `U` / `V`, so nothing downstream changes. Fit time is on `train_seconds`. |
 | `factors` | 16 | latent dimensionality `k` (try 16–32) |
-| `regularization` | 0.05 | ALS L2 |
-| `iterations` | 15 | ALS sweeps |
+| `regularization` | 0.05 | ALS L2 (unused by LightFM) |
+| `iterations` | 15 | ALS sweeps / LightFM epochs |
 | `confidence_alpha` | `None` | `None` = raw `watch_ratio` (better on KuaiRec); float = `1 + α·watch_ratio` |
 | `k_neighbours` | 50 | users behind `cf_neighbour_scores` |
 | `session_modeller` | `None` | enables real session length + `next_item_scores` |
 | `interactions`, `item_categories`, `social_network` | `None` | in-memory tables (disk-free testing seam); from disk, categories come from the caption file |
+| `caption_categories` | `None` | raw caption table for LightFM item features; from disk, the loader's table. `None` in memory → identity-only features |
 
 ## Deferred
 
-A BPR alternative, a NeuMF upgrade, and `watch_ratio` debiasing.
+A BPR backend, a NeuMF upgrade, and `watch_ratio` debiasing.
 
 ## Tests
 
 `tests/test_user_modelling.py` trains on the synthetic fixtures in `conftest.py`
 (no disk I/O). It covers the vector, stats, cold start, kNN-CF against a
 hand-computed single neighbour, friends' mean scores and session context.
+`TestLightFMBackend` (skipped when `lightfm` is not installed) checks shapes
+against the ALS id maps, profile lookups, and that a rare video sharing a
+category and tag with a popular one ends up closer to it than to an unrelated video.

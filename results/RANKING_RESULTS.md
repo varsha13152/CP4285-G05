@@ -232,3 +232,83 @@ its nDCG@5 lift is not significant.
 
 **Verdict: inconclusive (not yet evaluated).** Keep `use_mf_score=False` until
 the two sweeps above are run and compared.
+
+---
+
+## 9. LightFM vs ALS (long-term probe)
+
+**Question.** ALS gives rarely-watched videos weak vectors. Does LightFM, which
+builds each video vector as the sum of id + category + tag feature vectors, fix
+that, and does it help long-term personalisation?
+
+**Setup** (`scripts/probe_long_term.py --backends als lightfm --w-queries 0.5 0.7`).
+v3 test split, 81 queries; cases `anonymous` (81) and `none` (405). Gold
+intents (no LLM) + one bge-m3 embedding per query; hybrid retrieval once per
+query, 200 candidates; ranking with `use_mf_score=True`, `top_k=100`. There are
+no recent videos, so short-term is inactive and α does not matter. Metric code
+is copied from `scripts/evaluate_ranking.py`. Raw output:
+`results/probe_long_term_als.txt`, `results/probe_long_term_lightfm.txt`.
+
+LightFM: 16 components, WARP, 15 epochs, seed 42; item features = identity +
+first/second/third-level caption category (UNKNOWN skipped) + `topic_tag`
+tags on ≥ 5 videos (831 shared features); user features = identity; biases
+dropped.
+
+| Backend | Training time |
+|---|---|
+| ALS (`implicit`, multi-threaded) | 6.4 s |
+| LightFM (single thread, no OpenMP on Windows) | 677 s |
+
+### Model diagnostic (item vectors `V`)
+
+Same-cat top-10 = share of a video's 10 nearest videos (cosine on `V`) with the
+same first-level caption category.
+
+| Viewers (big_matrix) | Videos | ALS median ‖v‖ | LightFM median ‖v‖ | ALS same-cat top-10 | LightFM same-cat top-10 |
+|---|---|---|---|---|---|
+| < 10 | 1338 | 0.0013 | 1.239 | 0.101 | 0.923 |
+| 10–49 | 1839 | 0.0035 | 1.079 | 0.129 | 0.886 |
+| 50–99 | 1041 | 0.0078 | 1.014 | 0.145 | 0.872 |
+| 100–499 | 2134 | 0.0194 | 1.056 | 0.164 | 0.838 |
+| 500–999 | 658 | 0.0531 | 1.188 | 0.177 | 0.799 |
+| 1k+ | 3718 | 0.1093 | 1.378 | 0.208 | 0.761 |
+
+LightFM removes the norm collapse (rare and popular vectors are now the same
+scale). Its same-category share is high **partly by construction**: the
+category is one of the summed features, and for rare videos the id vector is
+barely trained, so those videos sit near their category vector. It shows the
+features are used, not that the vectors are better.
+
+### Ranking (none vs anonymous)
+
+Guardrail: MRR@3 drop ≤ 0.01. nDCG@5 = personal (condensed list, watch_ratio
+capped at 5), none vs anonymous*, paired bootstrap 95% CI, n = 185.
+Rare-answer rank = mean rank of answer videos with < 50 viewers (absent from
+the top 100 = 101), n = 175 case × video pairs; anonymous = 45.6 for both.
+
+| w_query | Backend | MRR@3 none (anon 0.2695) | MRR@3 drop | ΔnDCG@5 [95% CI] | Rare-answer rank none (Δ vs anon) |
+|---|---|---|---|---|---|
+| 0.5 | ALS | 0.1391 | +0.1305 ✗ | −0.0095 [−0.0232, +0.0033] ns | 67.6 (+22.0) |
+| 0.5 | LightFM | 0.1333 | +0.1362 ✗ | −0.0024 [−0.0142, +0.0098] ns | 60.6 (+15.0) |
+| 0.7 | ALS | 0.1613 | +0.1082 ✗ | −0.0059 [−0.0162, +0.0046] ns | 54.4 (+8.8) |
+| 0.7 | LightFM | 0.1737 | +0.0959 ✗ | +0.0011 [−0.0073, +0.0096] ns | 51.2 (+5.7) |
+
+LightFM is ahead on every point estimate at w_query = 0.7 and buries rare
+answers less at both settings (about a third less), but no nDCG@5 difference
+is significant and both backends fail the MRR@3 guardrail by ~10× the allowed
+drop. That matches the earlier finding: the long-term signal in the "none"
+condition never passes the guardrail.
+
+**Verdict: inconclusive.** LightFM fixes the rare-video vectors and buries rare
+answers less, but it gives no significant nDCG@5 lift, does not rescue the
+MRR@3 guardrail, and trains ~100× slower here. Keep `backend="als"` as the
+default.
+
+**Install note (Windows).** `pip install lightfm` (1.17) fails on Python 3.12:
+the C code shipped in the package uses CPython internals removed in 3.12
+(`curexc_traceback`, `ob_digit`). On Python 3.11 it builds (via
+`setup.py bdist_wheel`, since its `setup.py` breaks under pip's isolated
+build), but WARP/BPR then crash with an access violation: `rand_r` casts to
+`long`, which is 32-bit on Windows, so negative samples get negative indices.
+The numbers above use 1.17 with that one cast changed to `long long` (matches
+Linux behaviour).

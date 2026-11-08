@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+lightfm = ["lightfm>=1.17"]
 llm = [
     "openai>=1.0",
 ]

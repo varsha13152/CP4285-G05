@@ -6,6 +6,8 @@ the ALS fit runs in milliseconds with no disk I/O.
 
 import math
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from recsys.contracts.models import EngagementProfile
@@ -233,3 +235,107 @@ def test_session_context_from_recent_videos(
 
 def test_session_context_absent_without_recent_videos(modeller, sample_query_intent):
     assert modeller.build_session_profile(1, sample_query_intent).session_context is None
+
+
+# ---------------------------------------------------------------------------
+# backend switch: ALS (default) vs LightFM
+# ---------------------------------------------------------------------------
+
+def test_default_backend_is_als(sample_interactions):
+    m = UserModeller(interactions=sample_interactions, factors=FACTORS, iterations=3)
+    assert m.backend == "als"
+    assert type(m._model).__module__.startswith("implicit")
+
+
+def test_unknown_backend_rejected(sample_interactions):
+    with pytest.raises(ValueError, match="backend"):
+        UserModeller(interactions=sample_interactions, backend="bpr")
+
+
+def _caption_table(video_ids, first, second, tags):
+    """Tiny raw caption table in the kuairec_caption_category.csv layout."""
+    return pd.DataFrame({
+        "video_id": video_ids,
+        "topic_tag": tags,
+        "first_level_category_id": first,
+        "second_level_category_id": second,
+        "third_level_category_id": [-124] * len(video_ids),
+    })
+
+
+@pytest.fixture
+def sample_caption_categories():
+    # "cooking" is on 5 videos (>= 5 -> a shared feature); "travel" on 1 (dropped).
+    return _caption_table(
+        [10, 20, 30, 40, 50, 60],
+        [1, 2, 1, 2, 1, 3],
+        [11, 21, 11, 21, 11, -124],
+        ["[cooking]", "[cooking]", "[cooking,fun]", "[cooking]", "[cooking]", "[travel]"],
+    )
+
+
+class TestLightFMBackend:
+    @pytest.fixture(autouse=True)
+    def _needs_lightfm(self):
+        pytest.importorskip("lightfm")
+
+    def _fit(self, interactions, captions, **kw):
+        return UserModeller(
+            interactions=interactions, caption_categories=captions,
+            factors=FACTORS, iterations=kw.pop("iterations", 5), backend="lightfm", **kw,
+        )
+
+    def test_shapes_match_als_id_maps(self, sample_interactions, sample_caption_categories):
+        lfm = self._fit(sample_interactions, sample_caption_categories)
+        als = UserModeller(interactions=sample_interactions, factors=FACTORS, iterations=3)
+        assert np.array_equal(lfm.item_ids, als.item_ids)
+        assert lfm._user_to_row == als._user_to_row
+        assert lfm.item_factors.shape == als.item_factors.shape
+        assert lfm._user_factors.shape == als._user_factors.shape
+        assert np.isfinite(lfm.item_factors).all()
+        assert np.isfinite(lfm._user_factors).all()
+        # identity + c1:{1,2,3} + c2:{11,21} + tag:cooking; -124 and rare tags skipped
+        assert sorted(lfm.lightfm_feature_names) == sorted(
+            ["c1:1", "c1:2", "c1:3", "c2:11", "c2:21", "tag:cooking"]
+        )
+
+    def test_build_profile_has_vector_and_cf(
+        self, sample_interactions, sample_caption_categories
+    ):
+        m = self._fit(sample_interactions, sample_caption_categories, k_neighbours=2)
+        profile = m.build_profile(1)
+        assert len(profile.user_vector) == FACTORS
+        assert profile.cf_neighbour_scores  # non-empty
+        assert all(np.isfinite(v) for v in profile.cf_neighbour_scores.values())
+
+    def test_identity_only_without_captions(self, sample_interactions):
+        m = self._fit(sample_interactions, None, iterations=2)
+        assert m.lightfm_feature_names == []
+        assert m.item_factors.shape == (6, FACTORS)
+
+    def test_rare_video_borrows_from_shared_features(self):
+        # Video 1 is watched by 40 users, video 2 by one; they share category
+        # 7/77 and tag "cooking". Video 3 is unrelated (category 9, no tags).
+        rows = []
+        for u in range(40):
+            rows.append((u, 1, 1.0))
+            rows.append((u, 100 + u % 5, 0.5))  # filler videos 100..104
+        rows += [(0, 2, 1.0), (1, 3, 1.0), (2, 3, 0.8)]
+        inter = pd.DataFrame(rows, columns=["user_id", "video_id", "watch_ratio"])
+        inter["timestamp"] = 1.0
+        inter["date"] = 20200101
+        captions = _caption_table(
+            [1, 2, 3, 100, 101, 102, 103, 104],
+            [7, 7, 9, 8, 8, 8, 8, 8],
+            [77, 77, 99, 88, 88, 88, 88, 88],
+            ["[cooking]", "[cooking]", "[]"] + ["[cooking]"] * 5,
+        )
+        m = self._fit(inter, captions, iterations=10)
+
+        def cos(a, b):
+            va = m.item_factors[m.column_for_video_id(a)]
+            vb = m.item_factors[m.column_for_video_id(b)]
+            return float(va @ vb / (np.linalg.norm(va) * np.linalg.norm(vb)))
+
+        assert cos(1, 2) > cos(1, 3)
+        assert cos(1, 2) > cos(2, 3)

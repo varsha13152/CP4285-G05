@@ -1,9 +1,12 @@
-"""Long-term user modelling (``u_long``) via implicit ALS matrix factorization.
+"""Long-term user modelling (``u_long``) via matrix factorization.
 
-Trains an implicit-feedback ALS model over KuaiRec's sparse ``big_matrix``,
-feeding ``watch_ratio`` as the per-interaction *confidence*. Each user's learned
-latent factor vector is exposed on ``EngagementProfile.user_vector`` and consumed
-downstream purely as a Stage 4 ranking signal, never as a retrieval filter.
+Trains an implicit-feedback ALS model (default) over KuaiRec's sparse
+``big_matrix``, feeding ``watch_ratio`` as the per-interaction *confidence*.
+``backend="lightfm"`` swaps in LightFM (WARP), whose video vectors are the sum
+of id + category + tag feature vectors, so rarely-watched videos borrow from
+shared, well-trained features. Either way each user's latent vector is exposed
+on ``EngagementProfile.user_vector`` and consumed downstream purely as a Stage 4
+ranking signal, never as a retrieval filter.
 
 In the query-first cascade, Stage 2 also precomputes the candidate-independent
 lookups Stage 4 needs, so ranking is a dict lookup per candidate:
@@ -40,6 +43,8 @@ Usage::
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -49,18 +54,30 @@ from scipy.sparse import csr_matrix
 from recsys.contracts.models import EngagementProfile, QueryIntent, SessionContext
 from recsys.data.item_features import caption_category_table
 from recsys.data.loader import load_kuairec
+from recsys.data.schema import TOPIC_TAG
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from recsys.session_modelling import SessionModeller
 
 _SECONDS_PER_DAY = 86_400.0
+_BACKENDS = ("als", "lightfm")
+_UNKNOWN_CATEGORY = -124  # KuaiRec's "UNKNOWN" caption category id
+_MIN_TAG_VIDEOS = 5  # a topic_tag becomes a LightFM feature only if this many videos use it
+_MAX_SAMPLE_WEIGHT = 5.0  # LightFM sample_weight = watch_ratio clipped to [0, 5]
 
 
 class UserModeller:
-    """Build long-term engagement profiles backed by ALS latent factors.
+    """Build long-term engagement profiles backed by MF latent factors.
 
     Parameters
     ----------
+    backend : str
+        ``"als"`` (default, implicit ALS with ``watch_ratio`` confidence) or
+        ``"lightfm"`` (LightFM WARP with id + category + tag item features;
+        needs the optional ``lightfm`` extra). Both yield the same ``U`` / ``V``
+        shapes and id maps, so everything downstream is unchanged.
     data_dir : str
         Directory holding the raw KuaiRec CSVs. Ignored when *interactions*
         is supplied directly (the testing / custom-data seam).
@@ -68,9 +85,9 @@ class UserModeller:
         Latent dimensionality ``k`` of the learned user/item vectors
         (``EngagementProfile.user_vector`` has length ``factors``).
     regularization : float
-        ALS L2 regularization strength.
+        ALS L2 regularization strength (unused by LightFM).
     iterations : int
-        Number of ALS alternating-minimization sweeps.
+        Number of ALS alternating-minimization sweeps (LightFM: training epochs).
     confidence_alpha : float | None
         Confidence transform (open knob). ``None`` feeds the raw
         ``watch_ratio`` as confidence; a float feeds
@@ -100,8 +117,14 @@ class UserModeller:
         and loading from disk, the loader's ``social_network`` is used; when
         ``None`` with in-memory *interactions*, ``social_scores`` stay empty.
     k_neighbours : int
-        Number of nearest users (cosine over ALS user vectors) behind
+        Number of nearest users (cosine over user vectors) behind
         ``cf_neighbour_scores``.
+    caption_categories : pandas.DataFrame | None
+        Raw caption table (``kuairec_caption_category.csv``) for the LightFM
+        item features. When ``None`` and loading from disk, the loader's
+        ``caption_categories`` is used; when ``None`` with in-memory
+        *interactions*, LightFM falls back to identity-only item features.
+        Ignored by the ALS backend.
     """
 
     def __init__(
@@ -118,11 +141,12 @@ class UserModeller:
         session_modeller: SessionModeller | None = None,
         social_network: pd.DataFrame | None = None,
         k_neighbours: int = 50,
+        backend: str = "als",
+        caption_categories: pd.DataFrame | None = None,
     ) -> None:
-        # Lazy import so importing the package does not hard-require `implicit`
-        # unless a model is actually trained.
-        from implicit.als import AlternatingLeastSquares
-
+        if backend not in _BACKENDS:
+            raise ValueError(f"backend must be one of {_BACKENDS}, got {backend!r}")
+        self.backend = backend
         self.factors = factors
         self._session_modeller = session_modeller
         self._k_neighbours = k_neighbours
@@ -136,6 +160,8 @@ class UserModeller:
                 item_categories = caption_category_table(data.caption_categories)
             if social_network is None:
                 social_network = data.social_network
+            if caption_categories is None:
+                caption_categories = data.caption_categories
 
         self._interactions = interactions
 
@@ -148,28 +174,24 @@ class UserModeller:
         n_users = len(unique_users)
         n_videos = len(unique_videos)
 
-        # --- confidence matrix (users x videos), observed-only ------------
         rows = interactions["user_id"].map(self._user_to_row).to_numpy()
         cols = interactions["video_id"].map(self._video_to_col).to_numpy()
-        conf = interactions["watch_ratio"].to_numpy(dtype=np.float32)
-        if confidence_alpha is not None:
-            conf = (1.0 + confidence_alpha * conf).astype(np.float32)
-        # Duplicate (user, video) pairs are summed by scipy -> cumulative
-        # confidence, which is the intended "more views => more sure" behaviour.
-        user_items = csr_matrix(
-            (conf, (rows, cols)), shape=(n_users, n_videos), dtype=np.float32
-        )
 
-        # --- fit ALS ------------------------------------------------------
-        self._model = AlternatingLeastSquares(
-            factors=factors,
-            regularization=regularization,
-            iterations=iterations,
-            random_state=random_state,
-        )
-        self._model.fit(user_items, show_progress=show_progress)
-        self._user_factors = np.asarray(self._model.user_factors)
-        self._item_factors = np.asarray(self._model.item_factors)
+        # --- fit U (users x k) and V (videos x k) ---------------------------
+        start = time.perf_counter()
+        if backend == "als":
+            self._user_factors, self._item_factors = self._fit_als(
+                interactions, rows, cols, n_users, n_videos,
+                factors, regularization, iterations, confidence_alpha,
+                random_state, show_progress,
+            )
+        else:
+            self._user_factors, self._item_factors = self._fit_lightfm(
+                interactions, rows, cols, n_users, n_videos,
+                factors, iterations, random_state, show_progress, caption_categories,
+            )
+        self.train_seconds = time.perf_counter() - start
+        logger.info("%s fit: %.1fs", backend, self.train_seconds)
 
         # --- precomputed per-user statistics ------------------------------
         self._global_last_ts = float(interactions["timestamp"].max())
@@ -198,6 +220,151 @@ class UserModeller:
     # ------------------------------------------------------------------
     # construction helpers
     # ------------------------------------------------------------------
+    def _fit_als(
+        self,
+        interactions: pd.DataFrame,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        n_users: int,
+        n_videos: int,
+        factors: int,
+        regularization: float,
+        iterations: int,
+        confidence_alpha: float | None,
+        random_state: int | None,
+        show_progress: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Implicit ALS with ``watch_ratio`` as confidence -> ``(U, V)``."""
+        # Lazy import so importing the package does not hard-require `implicit`
+        # unless a model is actually trained.
+        from implicit.als import AlternatingLeastSquares
+
+        # --- confidence matrix (users x videos), observed-only ------------
+        conf = interactions["watch_ratio"].to_numpy(dtype=np.float32)
+        if confidence_alpha is not None:
+            conf = (1.0 + confidence_alpha * conf).astype(np.float32)
+        # Duplicate (user, video) pairs are summed by scipy -> cumulative
+        # confidence, which is the intended "more views => more sure" behaviour.
+        user_items = csr_matrix(
+            (conf, (rows, cols)), shape=(n_users, n_videos), dtype=np.float32
+        )
+        self._model = AlternatingLeastSquares(
+            factors=factors,
+            regularization=regularization,
+            iterations=iterations,
+            random_state=random_state,
+        )
+        self._model.fit(user_items, show_progress=show_progress)
+        return np.asarray(self._model.user_factors), np.asarray(self._model.item_factors)
+
+    def _fit_lightfm(
+        self,
+        interactions: pd.DataFrame,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        n_users: int,
+        n_videos: int,
+        factors: int,
+        epochs: int,
+        random_state: int | None,
+        show_progress: bool,
+        caption_categories: pd.DataFrame | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """LightFM (WARP) with id + category + tag item features -> ``(U, V)``.
+
+        Every view is a positive; ``sample_weight`` is the summed ``watch_ratio``
+        per (user, video) pair, clipped to ``[0, 5]``. Users get identity
+        features only. Bias terms are dropped: popularity is its own Stage 4
+        feature and ``U · V`` must stay comparable to ALS.
+        """
+        from lightfm import LightFM
+
+        summed = csr_matrix(
+            (interactions["watch_ratio"].to_numpy(dtype=np.float32), (rows, cols)),
+            shape=(n_users, n_videos), dtype=np.float32,
+        )
+        summed.sum_duplicates()
+        # Same sparsity structure for both, as LightFM requires.
+        positives = csr_matrix(
+            (np.ones_like(summed.data), summed.indices, summed.indptr), shape=summed.shape
+        ).tocoo()
+        weights = csr_matrix(
+            (np.clip(summed.data, 0.0, _MAX_SAMPLE_WEIGHT), summed.indices, summed.indptr),
+            shape=summed.shape,
+        ).tocoo()
+
+        item_features = self._lightfm_item_features(caption_categories)
+        model = LightFM(no_components=factors, loss="warp", random_state=random_state)
+        model.fit(
+            positives,
+            item_features=item_features,
+            sample_weight=weights,
+            epochs=epochs,
+            num_threads=1,  # Windows builds have no OpenMP
+            verbose=show_progress,
+        )
+        self._model = model
+        _, user_emb = model.get_user_representations()
+        _, item_emb = model.get_item_representations(item_features)
+        return np.asarray(user_emb), np.asarray(item_emb)
+
+    def _lightfm_item_features(self, caption_categories: pd.DataFrame | None) -> csr_matrix:
+        """``(n_videos, n_features)`` row-normalised feature matrix, rows in
+        :attr:`item_ids` order: identity + first/second/third-level category
+        ids (``-124`` UNKNOWN skipped) + ``topic_tag`` tags used on >= 5 videos."""
+        n_videos = len(self._col_to_video)
+        feats: list[list[str]] = [[] for _ in range(n_videos)]
+        if caption_categories is not None and len(caption_categories):
+            # video_id can load as text (malformed CSV rows): coerce, drop bad rows.
+            vids = pd.to_numeric(caption_categories["video_id"], errors="coerce")
+            table = caption_categories.assign(video_id=vids).dropna(subset=["video_id"])
+            table = table.assign(video_id=table["video_id"].astype(int))
+            table = table.drop_duplicates("video_id")
+            table = table[table["video_id"].isin(list(self._video_to_col))]
+            video_cols = table["video_id"].map(self._video_to_col).to_numpy()
+            for level, column in (
+                ("c1", "first_level_category_id"),
+                ("c2", "second_level_category_id"),
+                ("c3", "third_level_category_id"),
+            ):
+                if column not in table.columns:
+                    continue
+                ids = pd.to_numeric(table[column], errors="coerce")
+                for col, cid in zip(video_cols, ids):
+                    if pd.notna(cid) and int(cid) != _UNKNOWN_CATEGORY:
+                        feats[col].append(f"{level}:{int(cid)}")
+            if TOPIC_TAG in table.columns:
+                tags_per_video = [
+                    sorted({t.strip() for t in str(raw).strip("[]").split(",") if t.strip()})
+                    if pd.notna(raw) else []
+                    for raw in table[TOPIC_TAG]
+                ]
+                counts: dict[str, int] = {}
+                for tags in tags_per_video:
+                    for tag in tags:
+                        counts[tag] = counts.get(tag, 0) + 1
+                for col, tags in zip(video_cols, tags_per_video):
+                    feats[col].extend(
+                        f"tag:{t}" for t in tags if counts[t] >= _MIN_TAG_VIDEOS
+                    )
+
+        vocab: dict[str, int] = {}
+        r_idx, c_idx = list(range(n_videos)), list(range(n_videos))  # identity block
+        for col, names in enumerate(feats):
+            for name in names:
+                r_idx.append(col)
+                c_idx.append(n_videos + vocab.setdefault(name, len(vocab)))
+        matrix = csr_matrix(
+            (np.ones(len(r_idx), dtype=np.float32), (r_idx, c_idx)),
+            shape=(n_videos, n_videos + len(vocab)), dtype=np.float32,
+        )
+        # Rows sum to 1, as lightfm.data.Dataset does by default.
+        row_sums = np.asarray(matrix.sum(axis=1)).ravel()
+        matrix = csr_matrix(matrix.multiply(1.0 / row_sums[:, None]), dtype=np.float32)
+        self.lightfm_feature_names = list(vocab)
+        logger.info("lightfm item features: %d ids + %d shared", n_videos, len(vocab))
+        return matrix
+
     @staticmethod
     def _compute_user_stats(interactions: pd.DataFrame) -> dict[int, dict]:
         """One-pass per-user scalar aggregates keyed by ``user_id``."""
