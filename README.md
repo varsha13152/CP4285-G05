@@ -35,6 +35,74 @@ Shared types live in `src/recsys/contracts/`; stage interfaces are the
 `Protocol`s in `src/recsys/pipeline/pipeline.py`. Each package has its own
 README with the details.
 
+## What each stage passes on
+
+| Stage | Input | Output | How it's calculated |
+|-------|-------|--------|---------------------|
+| 1 Query understanding | query text | `QueryIntent`: topics (category id + confidence), style, duration (SHORT / MEDIUM / LONG / ANY), intent type, negative constraints, `query_embedding` (1024 numbers) | LLM (SOCLaaS) returns the fields as JSON; bge-m3 embeds the raw query |
+| 2 User & session model | `user_id`, recent video ids | `EngagementProfile` (fields below) and the ALS video matrix V (given to the ranker) | ALS on `big_matrix` plus counting over the raw data |
+| Router | `QueryIntent`, `EngagementProfile` | `QueryRetrievalRequest`: topics with confidence ≥ 0.3, duration range (SHORT 0–15 s, MEDIUM 15–60 s, LONG 60–315 s), pool size 100, profile passed through unchanged | fixed rules |
+| 3 Retrieval | `QueryRetrievalRequest` | `CandidateSet`: 100 candidates, each with `query_score`, category, duration and the flags `seen`, `popularity`, `trending` | Stage 3 score below |
+| 4 Ranking | `CandidateSet` (carries the profile) | `RankedList`: top 20 video ids with rank and score | Stage 4 score below |
+
+### Stage 2 output: `EngagementProfile`
+
+U = ALS user vectors, V = ALS video vectors (16 numbers each), trained on `big_matrix` with `watch_ratio` as confidence.
+
+| Field | Type | How it's calculated | Used by |
+|-------|------|---------------------|---------|
+| `cf_neighbour_scores` | {video: score} | Take the 50 users with the highest cosine(U_user, U_other). For each video they watched: `Σ similarity × their watch_ratio` | Ranking (long-term) |
+| `category_distribution` | {category: share} | Share of the user's views in each category | Ranking (long-term) |
+| `social_scores` | {video: score} | Average `watch_ratio` among the user's friends who watched the video (empty for the 93% of users with no friends) | Ranking (long-term) |
+| `session_context.next_item_scores` | {video: probability} | Markov: `P(next = j \| last watched = i)` = count(i → j) / count(i → any), counted within 30-min sessions | Ranking (short-term) |
+| `session_context.recent_video_ids` | list | The recent videos given as input | Ranking (short-term) |
+| `seen_video_ids` | set | Every video in the user's history | Retrieval sets the `seen` flag; not used in ranking |
+| `user_vector` | 16 numbers | The user's row of U | not used yet |
+| `session_vector`, `recent_category_ids` | — | Average V of the recent videos; their categories | not used yet |
+| Stats | numbers | Mean / std `watch_ratio`, number of views, active days, average session length, days since last view | not used yet |
+
+Unknown users get empty fields; empty means "no data", not "dislikes".
+
+### Stage 3 score: query relevance only
+
+```
+sem         = cosine(query_embedding, video text embedding)       # bge-m3
+cat         = confidence of the query topic matching the video's category (0 if none)
+dur         = 1 inside the duration range, else exp(−seconds outside / 15)
+query_score = 1.0·sem + 0.5·cat + 0.2·dur
+```
+
+A video qualifies if it has text or a matching category; the top 100 by `query_score` become candidates.
+
+### Stage 4 score: personalised re-ordering
+
+| Group | Signal | Value for candidate *i* |
+|-------|--------|-------------------------|
+| Query | Query relevance | Stage 3 `query_score` |
+| Long-term | CF | `cf_neighbour_scores[i]` |
+| Long-term | Category affinity | `category_distribution[category of i]` |
+| Long-term | Social | `social_scores[i]` |
+| Short-term | Markov | `next_item_scores[i]` |
+| Short-term | ALS similarity | average of the top-3 cosine(V_i, V_recent) over the recent videos |
+| Short-term | Caption similarity | average of the top-3 cosine(text embedding_i, text embedding_recent) over the recent videos |
+
+A missing value counts as 0.
+
+```
+r(x)       = percentile rank of x among the candidates (0–1)
+long_term  = average of r(CF), r(category affinity), r(social)
+short_term = average of r(Markov), r(ALS similarity), r(caption similarity)   # only with recent videos
+             (a signal that is equal for every candidate is left out of its average)
+
+personal   = α·long_term + (1 − α)·short_term   if both are active
+           = the active one                     if only one is active
+           = 0                                  if neither (anonymous user)
+
+score      = w_query·r(query_score) + (1 − w_query)·personal
+```
+
+Defaults: α = 0.5, w_query = 0.5. The 20 highest scores are returned.
+
 ## Key design choices
 
 - **Query-first:** retrieval never looks at the user, so taste can't pull
