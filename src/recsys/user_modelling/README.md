@@ -15,6 +15,39 @@ User ID + recent videos ──→ [Stage 2 (this)] ──→ EngagementProfile �
                                                  [Stage 4: ranking — reads this profile]
 ```
 
+## Status update: alternatives tried (2026-11-08)
+
+### Long-term (user history)
+
+| Alternative | What it changes | Result | Decision |
+|---|---|---|---|
+| **ALS** (default) | User and video vectors from implicit ALS, `watch_ratio` as confidence | Fast (~6 s). Rare videos (< 50 viewers, 30% of the catalogue) get weak vectors: ~100× shorter, and only 10–13% of their nearest videos share their category. | Keep as default |
+| **LightFM** (`backend="lightfm"`) | Each video vector = its id + category + tag vectors, so rare videos borrow from shared features | Fixes rare-video vectors (normal length; nearest videos mostly share the category). In ranking, no significant difference from ALS, but the personal-preference labels contain almost no rare videos (0.3%), so the current evaluation can't show the benefit. Much slower (~11 min). | Available, not default |
+| **MF score off** in ranking | Ranker uses CF, category affinity and social only | Personalisation lowers MRR@3 by 0.05–0.06 (allowed: 0.01); no significant nDCG@5 gain. | Baseline |
+| **MF score on** in ranking (`use_mf_score=True`) | Adds `user_vector · video_vector` as a 4th long-term signal | Running; results to follow. | Pending |
+
+### Short-term (current session)
+
+Alternatives for splitting viewing history into sessions
+([`session_modelling`](../session_modelling/README.md)):
+
+| Alternative | Next-video accuracy (HR@10) | Decision |
+|---|---|---|
+| 30-minute gap | 0.1320 | Keep (simplest) |
+| Per-user gap (each user's 90th-percentile gap) | 0.1321 | – |
+| One session per user | 0.1320 | – |
+
+No difference. The session cut only affects one of the three short-term
+ranking signals (Markov next-video), so it can't move the final ranking much.
+
+### Known evaluation issues
+
+- The personal nDCG@5 uses video category labels (`item_categories.csv`
+  `feat`) that disagree with the query categories for ~7 topics, and 4 topics
+  can never score. Fix planned.
+- The LLM query parser gives different results between runs, so gains below
+  ~0.015 can't be separated from run-to-run noise.
+
 ## What this implements: `u_long`
 
 The long-term user model is **matrix factorization** via implicit ALS
