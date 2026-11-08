@@ -40,14 +40,14 @@ README with the details.
 | Stage | Input | Output | How it's calculated |
 |-------|-------|--------|---------------------|
 | 1 Query understanding | query text | `QueryIntent`: topics (category id + confidence), style, duration (SHORT / MEDIUM / LONG / ANY), intent type, negative constraints, `query_embedding` (1024 numbers) | LLM (SOCLaaS) returns the fields as JSON; bge-m3 embeds the raw query |
-| 2 User & session model | `user_id`, recent video ids | `EngagementProfile` (fields below) and the ALS video matrix V (given to the ranker) | ALS on `big_matrix` plus counting over the raw data |
+| 2 User & session model | `user_id`, recent video ids | `EngagementProfile` (fields below) and the video matrix V (given to the ranker) | Matrix factorization on `big_matrix` (ALS by default, LightFM optional) plus counting over the raw data |
 | Router | `QueryIntent`, `EngagementProfile` | `QueryRetrievalRequest`: topics with confidence ≥ 0.3, duration range (SHORT 0–15 s, MEDIUM 15–60 s, LONG 60–315 s), pool size 100, profile passed through unchanged | fixed rules |
 | 3 Retrieval | `QueryRetrievalRequest` | `CandidateSet`: 100 candidates, each with `query_score`, category, duration and the flags `seen`, `popularity`, `trending` | Stage 3 score below |
 | 4 Ranking | `CandidateSet` (carries the profile) | `RankedList`: top 20 video ids with rank and score | Stage 4 score below |
 
 ### Stage 2 output: `EngagementProfile`
 
-U = ALS user vectors, V = ALS video vectors (16 numbers each), trained on `big_matrix` with `watch_ratio` as confidence.
+U = user vectors, V = video vectors (16 numbers each), trained on `big_matrix`. `UserModeller(backend=...)` picks the method: `"als"` (default, implicit ALS with `watch_ratio` as confidence) or `"lightfm"` (each video vector = its id + category + tag vectors, which gives rarely-watched videos usable vectors). Alternatives tried and results: [Stage 2 README](src/recsys/user_modelling/README.md#status-update-alternatives-tried-2026-11-08).
 
 | Field | Type | How it's calculated | Used by |
 |-------|------|---------------------|---------|
@@ -57,7 +57,7 @@ U = ALS user vectors, V = ALS video vectors (16 numbers each), trained on `big_m
 | `session_context.next_item_scores` | {video: probability} | Markov: `P(next = j \| last watched = i)` = count(i → j) / count(i → any), counted within 30-min sessions | Ranking (short-term) |
 | `session_context.recent_video_ids` | list | The recent videos given as input | Ranking (short-term) |
 | `seen_video_ids` | set | Every video in the user's history | Retrieval sets the `seen` flag; not used in ranking |
-| `user_vector` | 16 numbers | The user's row of U | not used yet |
+| `user_vector` | 16 numbers | The user's row of U | Ranking (long-term MF score), only with `use_mf_score=True` (off by default) |
 | `session_vector`, `recent_category_ids` | — | Average V of the recent videos; their categories | not used yet |
 | Stats | numbers | Mean / std `watch_ratio`, number of views, active days, average session length, days since last view | not used yet |
 
@@ -82,6 +82,7 @@ A video qualifies if it has text or a matching category; the top 100 by `query_s
 | Long-term | CF | `cf_neighbour_scores[i]` |
 | Long-term | Category affinity | `category_distribution[category of i]` |
 | Long-term | Social | `social_scores[i]` |
+| Long-term | MF score (optional) | `user_vector · V_i`, only with `use_mf_score=True` |
 | Short-term | Markov | `next_item_scores[i]` |
 | Short-term | ALS similarity | average of the top-3 cosine(V_i, V_recent) over the recent videos |
 | Short-term | Caption similarity | average of the top-3 cosine(text embedding_i, text embedding_recent) over the recent videos |
@@ -90,7 +91,7 @@ A missing value counts as 0.
 
 ```
 r(x)       = percentile rank of x among the candidates (0–1)
-long_term  = average of r(CF), r(category affinity), r(social)
+long_term  = average of r(CF), r(category affinity), r(social) [, r(MF score)]
 short_term = average of r(Markov), r(ALS similarity), r(caption similarity)   # only with recent videos
              (a signal that is equal for every candidate is left out of its average)
 
@@ -148,9 +149,9 @@ the known limits of the method, are in
 | Stage | Result |
 |-------|--------|
 | 1 | Topics 76%, style 90%, duration 70%, intent 73% accuracy |
-| 2 | ALS Recall@100 0.090 vs popularity 0.046; Markov HR@10 0.014 vs popularity 0.007 (rewatches excluded) |
+| 2 | ALS Recall@100 0.090 vs popularity 0.046; Markov HR@10 0.014 vs popularity 0.007 (rewatches excluded). Alternatives: LightFM fixes rare-video vectors but shows no significant ranking difference from ALS (the evaluation has almost no rare videos); the three session cuts (30-min, per-user, one per user) give the same HR@10 (0.132); MF score in ranking: on vs off pending. [Details](src/recsys/user_modelling/README.md#status-update-alternatives-tried-2026-11-08) |
 | 3 | Hybrid Recall@100 0.859, Recall@20 0.398 |
-| 4 | Personalisation helps **only with session context**: nDCG@5 +0.014 (α=0.4, w_query=0.6, significant). History alone lowers query relevance |
+| 4 | Personalisation helps **only with session context**: nDCG@5 +0.014 (α=0.4, w_query=0.6, significant), but this did not reproduce in a 2026-11-08 rerun (no significant lift at any setting). History alone lowers query relevance |
 
 Raw outputs are in `results/`.
 
