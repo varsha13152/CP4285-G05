@@ -196,3 +196,39 @@ The `category_distribution` from Stage 2's engagement profile gives a normalised
 | `scripts/run_pipeline.py` | Interactive pipeline demo (query → ranked list) |
 | `tests/fixtures/synthetic_queries.py` | 20 English synthetic evaluation queries |
 | `tests/fixtures/synthetic_queries_zh.py` | 20 Chinese synthetic evaluation queries |
+
+---
+
+## 8. Option 1: direct MF score
+
+**Change.** `QCSARRanker(use_mf_score=True)` adds the plain ALS prediction
+`mf[i] = user_vector · V[candidate_i]` (raw, un-normalised item factors) as a
+4th long-term signal next to CF, category affinity and social. Like the others
+it is rank-normalised inside `_active_mean`, so it is dropped automatically for
+cold-start users (empty `user_vector`). Candidates with no ALS row get the
+median of the known scores (neutral). A dimension mismatch between
+`user_vector` and the item factors logs a warning and skips the signal.
+Default is `False`, so rankings are unchanged until results justify switching.
+
+**Status: evaluation not run.** The comparison needs `data/raw/*.csv`
+(KuaiRec), `data/processed/caption_embeddings.npz` and SOCLaaS keys in `.env`;
+none were present in the working copy where this was implemented.
+
+Commands to produce the comparison:
+
+```bash
+python scripts/sweep_alpha.py --alphas 0.0 0.2 0.4 0.6 0.8 1.0 --w-queries 0.5 0.6 0.7 --out results/alpha_sweep_baseline_rerun.json
+python scripts/sweep_alpha.py --alphas 0.0 0.2 0.4 0.6 0.8 1.0 --w-queries 0.5 0.6 0.7 --mf-score --out results/alpha_sweep_mf.json
+```
+
+| Setting (α, w_query) | MF | none ΔnDCG@5 [95% CI] | none MRR@3 drop | guardrail | related ΔnDCG@5 | realistic nDCG@5 | realistic MRR@3 |
+|---|---|---|---|---|---|---|---|
+| _to fill_ | off | – | – | – | – | – | – |
+| _to fill_ | on | – | – | – | – | – | – |
+
+Baseline fact to beat: in the committed `alpha_sweep.json`, the "none"
+condition never passes the MRR@3 guardrail (drop ≤ 0.01) at any setting, and
+its nDCG@5 lift is not significant.
+
+**Verdict: inconclusive (not yet evaluated).** Keep `use_mf_score=False` until
+the two sweeps above are run and compared.

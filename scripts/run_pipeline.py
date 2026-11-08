@@ -46,6 +46,7 @@ def _build_ranker(
     *,
     alpha: float = 0.5,
     w_query: float = 0.5,
+    use_mf_score: bool = False,
 ):
     """Construct a QCSARRanker from a trained profiler + optional caption embeddings."""
     from recsys.ranking import QCSARRanker
@@ -55,6 +56,7 @@ def _build_ranker(
         item_ids=profiler.item_ids,
         alpha=alpha,
         w_query=w_query,
+        use_mf_score=use_mf_score,
     )
     if pathlib.Path(emb_path).exists():
         data = np.load(emb_path)
@@ -75,6 +77,8 @@ def main() -> None:
                         help="Long-term / short-term ratio (0=pure ST, 1=pure LT)")
     parser.add_argument("--w-query", type=float, default=0.5,
                         help="Query relevance weight (default 0.5)")
+    parser.add_argument("--mf-score", action="store_true",
+                        help="Add the direct MF score (user_vector · V) as a long-term signal")
     args = parser.parse_args()
 
     from recsys.intent import BgeM3Embedder, QueryParser
@@ -90,7 +94,10 @@ def main() -> None:
         print("Training Stage 2 (ALS + session model) ...", flush=True)
         profiler = _build_profiler()
         print(f"  done in {time.time() - t0:.0f}s")
-        ranker = _build_ranker(profiler, alpha=args.alpha, w_query=args.w_query)
+        ranker = _build_ranker(
+            profiler, alpha=args.alpha, w_query=args.w_query,
+            use_mf_score=args.mf_score,
+        )
         has_emb = ranker._emb is not None
         print(f"  Stage 4-6 ranker ready (caption embeddings: {has_emb})\n")
 

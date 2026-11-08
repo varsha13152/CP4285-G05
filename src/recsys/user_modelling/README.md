@@ -57,7 +57,7 @@ Stage 3 carry it; **Stage 4 consumes it**. Empty values mean *unavailable*
 
 | Field | Meaning | Derived from | Intended use in Stage 4 |
 |-------|---------|--------------|-------------------------|
-| `user_vector` | ALS latent-factor row — the user's position in taste-space. **Empty** for cold start. | `U[row]` | `U[u]·V[i]` taste-alignment feature. A ranking score, not a probability. |
+| `user_vector` | ALS latent-factor row — the user's position in taste-space. **Empty** for cold start. | `U[row]` | `U[u]·V[i]` taste-alignment feature, now used by the ranker as a 4th long-term signal behind `QCSARRanker(use_mf_score=True)` (off by default). A ranking score, not a probability. |
 | `cf_neighbour_scores` | `{video_id: Σ cosine(u, v) · watch_ratio(v, video)}` over the `k_neighbours` (50) nearest users. **Empty** for cold start. | brute-force cosine over ALS user vectors (7k × 16 ≈ 0.1 ms) + neighbours' `big_matrix` rows | the CF ranking signal (kNN users). Benchmark with vs without. |
 | `social_scores` | `{video_id: mean watch_ratio among the user's friends}`. **Empty** for the ~93% of users with no friends. | `social_network.csv` friend lists + friends' `big_matrix` rows (works for cold-start users who have friends) | friends-first social signal; fall back to the global **trending** item feature when empty. |
 | `session_context` | `SessionContext` — see below. `None` unless recent videos were given. | `build_session_profile(..., recent_video_ids)` | short-term momentum features. |
