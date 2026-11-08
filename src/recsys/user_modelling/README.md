@@ -24,7 +24,7 @@ User ID + recent videos ──→ [Stage 2 (this)] ──→ EngagementProfile �
 | **ALS** (default) | User and video vectors from implicit ALS, `watch_ratio` as confidence | Fast (~6 s). Rare videos (< 50 viewers, 30% of the catalogue) get weak vectors: ~100× shorter, and only 10–13% of their nearest videos share their category. | Keep as default |
 | **LightFM** (`backend="lightfm"`) | Each video vector = its id + category + tag vectors, so rare videos borrow from shared features | Fixes rare-video vectors (normal length; nearest videos mostly share the category). In ranking, no significant difference from ALS, but the personal-preference labels contain almost no rare videos (0.3%), so the current evaluation can't show the benefit. Much slower (~11 min). | Available, not default |
 | **MF score off** in ranking | Ranker uses CF, category affinity and social only | Personalisation lowers MRR@3 by 0.05–0.06 (allowed: 0.01); no significant nDCG@5 gain. | Baseline |
-| **MF score on** in ranking (`use_mf_score=True`) | Adds `user_vector · video_vector` as a 4th long-term signal | Running; results to follow. | Pending |
+| **MF score on** in ranking (`use_mf_score=True`) | Adds `user_vector · video_vector` as a 4th long-term signal | No gain. History-only nDCG@5 lift still not significant (point estimate −0.005 to −0.008 vs −0.001 to −0.002 off); MRR@3 still drops 0.046–0.050, so the guardrail fails at all 18 settings. [Details](../../../results/RANKING_RESULTS.md#8-option-1-direct-mf-score) | Keep off |
 
 ### Short-term (current session)
 

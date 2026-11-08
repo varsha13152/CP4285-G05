@@ -102,7 +102,8 @@ personal   = α·long_term + (1 − α)·short_term   if both are active
 score      = w_query·r(query_score) + (1 − w_query)·personal
 ```
 
-Defaults: α = 0.5, w_query = 0.5. The 20 highest scores are returned.
+Defaults: α = 0.5, w_query = 0.5, `use_mf_score = False` (tested: no gain, see
+Current results). The 20 highest scores are returned.
 
 ## Key design choices
 
@@ -149,9 +150,9 @@ the known limits of the method, are in
 | Stage | Result |
 |-------|--------|
 | 1 | Topics 76%, style 90%, duration 70%, intent 73% accuracy |
-| 2 | ALS Recall@100 0.090 vs popularity 0.046; Markov HR@10 0.014 vs popularity 0.007 (rewatches excluded). Alternatives: LightFM fixes rare-video vectors but shows no significant ranking difference from ALS (the evaluation has almost no rare videos); the three session cuts (30-min, per-user, one per user) give the same HR@10 (0.132); MF score in ranking: on vs off pending. [Details](src/recsys/user_modelling/README.md#status-update-alternatives-tried-2026-11-08) |
+| 2 | ALS Recall@100 0.090 vs popularity 0.046; Markov HR@10 0.014 vs popularity 0.007 (rewatches excluded). Alternatives: LightFM fixes rare-video vectors but shows no significant ranking difference from ALS (the evaluation has almost no rare videos); the three session cuts (30-min, per-user, one per user) give the same HR@10 (0.132); MF score in ranking (`use_mf_score`): no gain, kept off (see Stage 4 row). [Details](src/recsys/user_modelling/README.md#status-update-alternatives-tried-2026-11-08) |
 | 3 | Hybrid Recall@100 0.859, Recall@20 0.398 |
-| 4 | Personalisation helps **only with session context**: nDCG@5 +0.014 (α=0.4, w_query=0.6, significant), but this did not reproduce in a 2026-11-08 rerun (no significant lift at any setting). History alone lowers query relevance |
+| 4 | Personalisation helps **only with session context**: nDCG@5 +0.014 (α=0.4, w_query=0.6, significant), but this did not reproduce in a 2026-11-08 rerun (no significant lift at any setting). History alone lowers query relevance. Adding the MF score (`user_vector · V_i`) as a 4th long-term signal does not help: on the history-only ("none") cases the nDCG@5 lift stays non-significant (−0.005 to −0.008 with it vs −0.001 to −0.002 without) and MRR@3 still drops 0.046–0.050 vs anonymous (guardrail ≤ 0.01 fails at 18/18 settings either way), so `use_mf_score` stays off. [Details](results/RANKING_RESULTS.md#8-option-1-direct-mf-score) |
 
 Raw outputs are in `results/`.
 

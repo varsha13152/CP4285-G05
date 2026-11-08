@@ -210,28 +210,44 @@ median of the known scores (neutral). A dimension mismatch between
 `user_vector` and the item factors logs a warning and skips the signal.
 Default is `False`, so rankings are unchanged until results justify switching.
 
-**Status: evaluation not run.** The comparison needs `data/raw/*.csv`
-(KuaiRec), `data/processed/caption_embeddings.npz` and SOCLaaS keys in `.env`;
-none were present in the working copy where this was implemented.
-
-Commands to produce the comparison:
+**Evaluation.** Two sweeps over α ∈ {0, 0.2, 0.4, 0.6, 0.8, 1.0} ×
+w_query ∈ {0.5, 0.6, 0.7} on the v3 test split, same code except the flag:
 
 ```bash
 python scripts/sweep_alpha.py --alphas 0.0 0.2 0.4 0.6 0.8 1.0 --w-queries 0.5 0.6 0.7 --out results/alpha_sweep_baseline_rerun.json
 python scripts/sweep_alpha.py --alphas 0.0 0.2 0.4 0.6 0.8 1.0 --w-queries 0.5 0.6 0.7 --mf-score --out results/alpha_sweep_mf.json
 ```
 
-| Setting (α, w_query) | MF | none ΔnDCG@5 [95% CI] | none MRR@3 drop | guardrail | related ΔnDCG@5 | realistic nDCG@5 | realistic MRR@3 |
-|---|---|---|---|---|---|---|---|
-| _to fill_ | off | – | – | – | – | – | – |
-| _to fill_ | on | – | – | – | – | – | – |
+Run-to-run noise: each sweep recomputes Stages 1–3, and the SOCLaaS query
+parser is not deterministic, so even the anonymous baseline moved between the
+two runs (MRR@3 0.1481 → 0.1502, anonymous* nDCG@5 0.1681 → 0.1711) although
+the flag cannot affect it. The deltas below are paired within each run
+(personalised vs anonymous on the same candidates), so compare deltas, not
+absolute values. "none" does not depend on α (no session → long-term only).
 
-Baseline fact to beat: in the committed `alpha_sweep.json`, the "none"
-condition never passes the MRR@3 guardrail (drop ≤ 0.01) at any setting, and
-its nDCG@5 lift is not significant.
+| w_query (α = 0.4) | MF | none ΔnDCG@5 [95% CI] | none MRR@3 drop | none guardrail | related ΔnDCG@5 [95% CI] | related MRR@3 drop | realistic nDCG@5 | realistic MRR@3 |
+|---|---|---|---|---|---|---|---|---|
+| 0.5 | off | −0.0017 [−0.0177, +0.0129] | 0.061 | ✗ | +0.0024 [−0.0116, +0.0172] | 0.069 | 0.1668 | 0.0878 |
+| 0.5 | on  | −0.0062 [−0.0232, +0.0087] | 0.048 | ✗ | −0.0053 [−0.0223, +0.0111] | 0.061 | 0.1650 | 0.1018 |
+| 0.6 | off | −0.0010 [−0.0145, +0.0119] | 0.050 | ✗ | +0.0042 [−0.0091, +0.0181] | 0.056 | 0.1675 | 0.0989 |
+| 0.6 | on  | −0.0052 [−0.0211, +0.0091] | 0.050 | ✗ | −0.0048 [−0.0215, +0.0110] | 0.042 | 0.1658 | 0.1004 |
+| 0.7 | off | −0.0009 [−0.0141, +0.0118] | 0.051 | ✗ | +0.0036 [−0.0085, +0.0165] | 0.049 | 0.1674 | 0.0983 |
+| 0.7 | on  | −0.0084 [−0.0242, +0.0053] | 0.046 | ✗ | −0.0033 [−0.0190, +0.0115] | 0.037 | 0.1628 | 0.1053 |
 
-**Verdict: inconclusive (not yet evaluated).** Keep `use_mf_score=False` until
-the two sweeps above are run and compared.
+Across all 18 settings, with and without MF:
+- "none" passes the MRR@3 guardrail (drop ≤ 0.01) at **0/18** settings and its
+  nDCG@5 lift is significant at **0/18**.
+- The MF point estimate for "none" nDCG@5 is lower than without it at every
+  setting (−0.005 to −0.008 vs −0.001 to −0.002); every CI still contains 0.
+- MF shrinks the MRR@3 drop slightly at w_query 0.5 and 0.7 (by 0.005 to
+  0.013), still 4–5× over the guardrail. Realistic MRR@3 rises 0.002–0.014,
+  realistic nDCG@5 falls 0.002–0.005. Part of the MRR change is the run noise
+  above (≈ 0.002 on the anonymous baseline).
+
+**Verdict: don't adopt.** The direct MF score does not make personal
+preference measurably better (nDCG@5 lift not significant, point estimate
+lower) and does not bring "none" within the MRR@3 guardrail. Keep
+`use_mf_score=False`.
 
 ---
 
