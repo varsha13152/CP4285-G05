@@ -328,3 +328,38 @@ build), but WARP/BPR then crash with an access violation: `rand_r` casts to
 `long`, which is 32-bit on Windows, so negative samples get negative indices.
 The numbers above use 1.17 with that one cast changed to `long long` (matches
 Linux behaviour).
+
+## 10. Evaluation fix: on-topic labels
+
+**Date:** 2026-11-09
+
+Metric 2 (personal nDCG@5) grades a video by the user's `watch_ratio` only if
+it is on-topic for the query. The scripts decided "on-topic" with the `feat`
+tags of `item_categories.csv`, but the query topics are caption first-level
+category ids. The two number categories differently:
+
+* `feat` only has ids 0–30, so topics 31+ (Fitness, Short Drama, Military,
+  Real Estate/Home, Oddities, Film & TV) never matched.
+* Some ids barely agree (small_matrix videos whose caption topic is matched by
+  the same `feat` id: Politics/News 0 of 15, Science & Law 3 of 38,
+  Tech/Digital 5 of 21, Fashion 51 of 124).
+* `feat` is multi-label, so off-topic videos counted as on-topic (Daily Life:
+  426 counted vs 122 by caption).
+
+`evaluate_ranking.py`, `sweep_alpha.py`, `tune_weights.py` and
+`probe_long_term.py` now use `video_topic_sets` (caption first-level ids).
+Effect, measured with gold intents and a 200-candidate pool (anonymous MRR@3 is
+unchanged by the fix):
+
+| | dev, `feat` | dev, caption | test, `feat` | test, caption |
+|---|---|---|---|---|
+| Personal cases that can never score | 30/225 | 0/225 | 15/555 | 0/555 |
+| nDCG@5 personalised, w_query = 0.5 | 0.244 | 0.328 | 0.233 | 0.329 |
+| nDCG@5 lift, w_query = 0.5 [95% CI] | +0.001 [−0.010, +0.012] | −0.001 [−0.013, +0.011] | −0.004 [−0.011, +0.003] | −0.008 [−0.016, +0.001] |
+| nDCG@5 lift, w_query = 0.7 [95% CI] | −0.005 [−0.013, +0.003] | −0.005 [−0.014, +0.004] | +0.001 [−0.004, +0.005] | +0.004 [−0.000, +0.009] |
+
+The level of nDCG@5 rises because more videos are graded, but no verdict
+changes: the pooled personal lift is still not significant, and the only
+significant per-condition lifts are negative (test "none" at w_query = 0.5:
+−0.016 [−0.032, −0.002]; dev "related" at 0.7: −0.018 [−0.036, −0.001]). Results in sections 2–9
+were computed with the old `feat` labels and Stage 3 topic weight 0.5.

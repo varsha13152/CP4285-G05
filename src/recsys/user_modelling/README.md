@@ -42,9 +42,11 @@ ranking signals (Markov next-video), so it can't move the final ranking much.
 
 ### Known evaluation issues
 
-- The personal nDCG@5 uses video category labels (`item_categories.csv`
-  `feat`) that disagree with the query categories for ~7 topics, and 4 topics
-  can never score. Fix planned.
+- ~~The personal nDCG@5 uses video category labels (`item_categories.csv`
+  `feat`) that disagree with the query categories.~~ Fixed 2026-11-09: "on-topic"
+  now uses the caption first-level category, the same ids as the query topics
+  (`video_topic_sets`). Unscorable cases on test went from 15/555 to 0 and the
+  conclusions did not change ([details](../../../results/RANKING_RESULTS.md#10-evaluation-fix-on-topic-labels)).
 - The LLM query parser gives different results between runs, so gains below
   ~0.015 can't be separated from run-to-run noise.
 

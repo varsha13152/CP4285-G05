@@ -69,8 +69,13 @@ Unknown users get empty fields; empty means "no data", not "dislikes".
 sem         = cosine(query_embedding, video text embedding)       # bge-m3
 cat         = confidence of the query topic matching the video's category (0 if none)
 dur         = 1 inside the duration range, else exp(−seconds outside / 15)
-query_score = 1.0·sem + 0.5·cat + 0.2·dur
+query_score = 1.0·sem + 0.1·cat + 0.2·dur
 ```
+
+The topic weight was 0.5 until 2026-11-09. At 0.5 the topic bonus outweighed
+the semantic differences across the whole pool, so when the parser chose a
+neighbouring category (Fashion instead of Attractiveness/Looks) the answers
+dropped out. See [`results/tune_topic_weight.txt`](results/tune_topic_weight.txt).
 
 A video qualifies if it has text or a matching category; the top 100 by `query_score` become candidates.
 
@@ -151,7 +156,7 @@ the known limits of the method, are in
 |-------|--------|
 | 1 | Topics 76%, style 90%, duration 70%, intent 73% accuracy |
 | 2 | ALS Recall@100 0.090 vs popularity 0.046; Markov HR@10 0.014 vs popularity 0.007 (rewatches excluded). Alternatives: LightFM fixes rare-video vectors but shows no significant ranking difference from ALS (the evaluation has almost no rare videos); the three session cuts (30-min, per-user, one per user) give the same HR@10 (0.132); MF score in ranking (`use_mf_score`): no gain, kept off (see Stage 4 row). [Details](src/recsys/user_modelling/README.md#status-update-alternatives-tried-2026-11-08) |
-| 3 | Hybrid Recall@100 0.859, Recall@20 0.398 |
+| 3 | Hybrid Recall@100 0.859, Recall@20 0.398 (gold intents, topic weight 0.5). Topic weight lowered to 0.1 (2026-11-09): with the live parser on v3 test, MRR@3 0.148 → 0.177 (3 queries better, 0 worse; not significant) and answer in pool 0.68 → 0.74; with gold topics MRR@3 0.270 → 0.259. Topic confidence threshold kept at 0.3 (no effect on dev). [Details](results/tune_topic_weight.txt) |
 | 4 | Personalisation helps **only with session context**: nDCG@5 +0.014 (α=0.4, w_query=0.6, significant), but this did not reproduce in a 2026-11-08 rerun (no significant lift at any setting). History alone lowers query relevance. Adding the MF score (`user_vector · V_i`) as a 4th long-term signal does not help: on the history-only ("none") cases the nDCG@5 lift stays non-significant (−0.005 to −0.008 with it vs −0.001 to −0.002 without) and MRR@3 still drops 0.046–0.050 vs anonymous (guardrail ≤ 0.01 fails at 18/18 settings either way), so `use_mf_score` stays off. [Details](results/RANKING_RESULTS.md#8-option-1-direct-mf-score) |
 
 Raw outputs are in `results/`.

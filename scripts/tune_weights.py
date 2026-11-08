@@ -13,13 +13,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import pathlib
 import sys
 import time
 
 import numpy as np
-import pandas as pd
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -33,12 +31,10 @@ WATCH_RATIO_CAP = 5.0
 
 
 def _load_video_categories(data_dir: str) -> dict[int, set[int]]:
-    df = pd.read_csv(f"{data_dir}/item_categories.csv")
-    vid_cats: dict[int, set[int]] = {}
-    for row in df.itertuples(index=False):
-        cats = ast.literal_eval(row.feat) if isinstance(row.feat, str) else row.feat
-        vid_cats[int(row.video_id)] = set(cats)
-    return vid_cats
+    """{video_id: {caption first-level category id}} — same ids as the query topics."""
+    from recsys.data.item_features import video_topic_sets
+
+    return video_topic_sets(data_dir)
 
 
 def main() -> None:

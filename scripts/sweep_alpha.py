@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import pathlib
 import sys
@@ -23,7 +22,6 @@ import time
 from types import SimpleNamespace
 
 import numpy as np
-import pandas as pd
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -104,7 +102,7 @@ def main() -> None:
         ranker_base["caption_embeddings"] = emb_data["embeddings"]
         ranker_base["caption_video_ids"] = emb_data["video_ids"]
 
-    from recsys.data.schema import FEAT, USER_ID, VIDEO_ID, WATCH_RATIO
+    from recsys.data.schema import USER_ID, VIDEO_ID, WATCH_RATIO
 
     # Ground truth
     user_gt: dict[int, dict[int, float]] = {}
@@ -114,12 +112,10 @@ def main() -> None:
         wr = float(getattr(row, WATCH_RATIO))
         user_gt.setdefault(uid, {})[vid] = wr
 
-    vid_cats: dict[int, set[int]] = {}
-    df_cats = pd.read_csv(f"{args.data_dir}/item_categories.csv")
-    for row in df_cats.itertuples(index=False):
-        feat_val = getattr(row, FEAT)
-        cats = ast.literal_eval(feat_val) if isinstance(feat_val, str) else feat_val
-        vid_cats[int(getattr(row, VIDEO_ID))] = set(cats)
+    # "on-topic" = caption first-level id, the same id space as the query topics
+    from recsys.data.item_features import video_topic_sets
+
+    vid_cats = video_topic_sets(args.data_dir)
 
     # ------------------------------------------------------------------
     # 2. Cache CandidateSets (Stages 1-3) — the expensive part

@@ -4,7 +4,11 @@ import math
 
 import pandas as pd
 
-from recsys.data.item_features import build_item_table, caption_category_table
+from recsys.data.item_features import (
+    build_item_table,
+    caption_category_table,
+    video_topic_sets,
+)
 
 
 def test_caption_category_table_keeps_only_known_ids():
@@ -50,3 +54,12 @@ def test_build_item_table():
     assert t.loc[1, "popularity"] == 4
     assert math.isclose(t.loc[1, "trending"], math.log((3 + 1) / (1 + 1)))
     assert t.loc[2, "trending"] == 0.0  # no plays in either window
+
+
+def test_video_topic_sets_uses_caption_first_level_ids(tmp_path):
+    pd.DataFrame({
+        "video_id": [1, 2, 3],
+        "first_level_category_id": [11, -124, 2],
+    }).to_csv(tmp_path / "kuairec_caption_category.csv", index=False)
+    # UNKNOWN (-124) has no topic, so video 2 is absent rather than an empty set
+    assert video_topic_sets(str(tmp_path)) == {1: {11}, 3: {2}}

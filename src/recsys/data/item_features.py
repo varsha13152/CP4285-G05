@@ -147,3 +147,18 @@ def caption_category_table(caption_categories: pd.DataFrame) -> pd.DataFrame:
     }).dropna(subset=[VIDEO_ID])
     table[VIDEO_ID] = table[VIDEO_ID].astype(int)
     return table.drop_duplicates(VIDEO_ID).reset_index(drop=True)
+
+
+def video_topic_sets(data_dir: str = "data/raw") -> dict[int, set[int]]:
+    """``{video_id: {caption first-level category id}}`` — the id space of the
+    query topics (``CategoryIndex``), for evaluation "is this video on-topic?".
+
+    Replaces the ``feat`` tags of ``item_categories.csv``, which label the same
+    category ids differently (e.g. ``feat`` 11 "Daily Life" matches the caption
+    id for only 19% of videos) and lack ids 31–39.
+    """
+    captions = pd.read_csv(
+        f"{data_dir}/kuairec_caption_category.csv", engine="python", on_bad_lines="skip"
+    )
+    table = caption_category_table(captions)
+    return {int(v): set(f) for v, f in zip(table[VIDEO_ID], table["feat"]) if f}

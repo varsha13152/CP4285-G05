@@ -22,14 +22,12 @@ src/recsys/evaluation/README.md.
 """
 
 import argparse
-import ast
 import datetime
 import pathlib
 import sys
 import time
 
 import numpy as np
-import pandas as pd
 
 # Ensure project root is on sys.path so we can import from tests/
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -46,13 +44,10 @@ WATCH_RATIO_CAP = 5.0
 
 
 def _load_video_categories(data_dir: str) -> dict[int, set[int]]:
-    """Build {video_id: {first-level category IDs}} from item_categories.csv."""
-    df = pd.read_csv(f"{data_dir}/item_categories.csv")
-    vid_cats: dict[int, set[int]] = {}
-    for row in df.itertuples(index=False):
-        cats = ast.literal_eval(row.feat) if isinstance(row.feat, str) else row.feat
-        vid_cats[int(row.video_id)] = set(cats)
-    return vid_cats
+    """{video_id: {caption first-level category id}} — same ids as the query topics."""
+    from recsys.data.item_features import video_topic_sets
+
+    return video_topic_sets(data_dir)
 
 
 def main() -> None:

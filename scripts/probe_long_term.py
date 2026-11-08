@@ -27,7 +27,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import pathlib
 import sys
 import time
@@ -76,13 +75,10 @@ def _gold_intent(q: dict, embedding: list[float]):
 
 
 def _load_video_categories(data_dir: str) -> dict[int, set[int]]:
-    """Copy of ``scripts/evaluate_ranking.py::_load_video_categories``."""
-    df = pd.read_csv(f"{data_dir}/item_categories.csv")
-    vid_cats: dict[int, set[int]] = {}
-    for row in df.itertuples(index=False):
-        cats = ast.literal_eval(row.feat) if isinstance(row.feat, str) else row.feat
-        vid_cats[int(row.video_id)] = set(cats)
-    return vid_cats
+    """{video_id: {caption first-level category id}} — same ids as the query topics."""
+    from recsys.data.item_features import video_topic_sets
+
+    return video_topic_sets(data_dir)
 
 
 def _diagnostic(V: np.ndarray, item_ids: np.ndarray, viewers: pd.Series,
