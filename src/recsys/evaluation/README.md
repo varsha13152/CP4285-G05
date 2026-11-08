@@ -89,6 +89,12 @@ Metrics only **grade** the output. Per case, the pipeline runs once, searching t
 | **Metric 1, query relevance**: does the list answer what was searched? | `answer_video_ids` (binary, same for every user) | **P@5, MRR@3** | `anonymous` | **guardrail**: must hold |
 | **Metric 2, personal preference**: among on-topic videos, are the ones *this user* enjoys near the top? | this user's `small_matrix` `watch_ratio`: on-topic → capped at 5, off-topic → 0, no label → skipped | **nDCG@5** | `anonymous*` (the anonymous ranking graded against the same user) | **target**: should rise |
 
+"On-topic" means the video's caption first-level category
+(`kuairec_caption_category.csv`, via `recsys.data.item_features.video_topic_sets`)
+is one of the query's `expected_topics`, the same ids Stage 1 uses. Before
+2026-11-09 the scripts used the `feat` tags of `item_categories.csv`, which
+number categories differently and stop at 30.
+
 **Personalisation works if metric 2 rises while metric 1 holds.**
 - If metric 1 drops, the ranker is ignoring the query.
 - If neither moves, personalisation adds nothing.

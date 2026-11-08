@@ -22,14 +22,12 @@ src/recsys/evaluation/README.md.
 """
 
 import argparse
-import ast
 import datetime
 import pathlib
 import sys
 import time
 
 import numpy as np
-import pandas as pd
 
 # Ensure project root is on sys.path so we can import from tests/
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -46,13 +44,10 @@ WATCH_RATIO_CAP = 5.0
 
 
 def _load_video_categories(data_dir: str) -> dict[int, set[int]]:
-    """Build {video_id: {first-level category IDs}} from item_categories.csv."""
-    df = pd.read_csv(f"{data_dir}/item_categories.csv")
-    vid_cats: dict[int, set[int]] = {}
-    for row in df.itertuples(index=False):
-        cats = ast.literal_eval(row.feat) if isinstance(row.feat, str) else row.feat
-        vid_cats[int(row.video_id)] = set(cats)
-    return vid_cats
+    """{video_id: {caption first-level category id}} — same ids as the query topics."""
+    from recsys.data.item_features import video_topic_sets
+
+    return video_topic_sets(data_dir)
 
 
 def main() -> None:
@@ -79,6 +74,8 @@ def main() -> None:
                     help="Long-term / short-term ratio (0=pure ST, 1=pure LT; default 0.5)")
     ap.add_argument("--w-query", type=float, default=0.5,
                     help="Query relevance weight (default 0.5)")
+    ap.add_argument("--mf-score", action="store_true",
+                    help="Add the direct MF score (user_vector · V) as a long-term signal")
     ap.add_argument("--out", default=None,
                     help="Output file (default: results/ranking_eval_{date}.txt)")
     args = ap.parse_args()
@@ -121,6 +118,7 @@ def main() -> None:
         item_ids=profiler.item_ids,
         alpha=args.alpha,
         w_query=args.w_query,
+        use_mf_score=args.mf_score,
     )
     emb_path = pathlib.Path(args.embeddings)
     if emb_path.exists():
@@ -132,7 +130,7 @@ def main() -> None:
         # longer list so the condensed (labelled-only) list has enough items to grade
         ranker_kwargs["top_k"] = 100
     ranker = QCSARRanker(**ranker_kwargs)
-    print(f"  Ranker: α={args.alpha}, w_query={args.w_query}")
+    print(f"  Ranker: α={args.alpha}, w_query={args.w_query}, mf_score={args.mf_score}")
 
     pipeline = RecommendationPipeline(
         parser=QueryParser(embedder=BgeM3Embedder()),

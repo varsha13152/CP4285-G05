@@ -89,7 +89,7 @@ def main() -> None:
     p.add_argument("--split", default="all", choices=["dev", "test", "all"])
     p.add_argument("--lang", default="en", choices=["en", "zh", "both"])
     p.add_argument("--w-sem", type=float, default=1.0)
-    p.add_argument("--w-cat", type=float, default=0.5)
+    p.add_argument("--w-cat", type=float, default=0.1)
     p.add_argument("--w-dur", type=float, default=0.2)
     today = dt.datetime.now().astimezone().date()
     p.add_argument("--out", default=f"results/stage3_eval_{today}.txt")

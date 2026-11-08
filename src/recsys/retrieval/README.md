@@ -26,7 +26,22 @@ signals, so a search never pulls in off-topic videos.
 | `hybrid` *(default)* | either | `w_sem·sem + w_cat·cat + w_dur·dur` |
 
 No query embedding → falls back to `category`. Ties are broken by `video_id`.
-Defaults: `w_sem=1.0, w_cat=0.5, w_dur=0.2`.
+Defaults: `w_sem=1.0, w_cat=0.1, w_dur=0.2`.
+
+`w_cat` was 0.5 until 2026-11-09. The topic bonus (0.5 × confidence, median
+0.43) was larger than the semantic gap between the 1st and 200th video (median
+0.13), so any video in the parser's topic beat the best match outside it. When
+the parser chose a neighbouring category (Short Drama for a Film & TV query),
+the answers left the pool. `scripts/tune_topic_weight.py` swept `w_cat` and the
+router's confidence threshold with the live parser and chose on dev:
+
+| v3 test, pool 100 | `w_cat` 0.5 | `w_cat` 0.1 |
+|---|---|---|
+| Live parser: MRR@3 | 0.148 | 0.177 (3 queries better, 0 worse; not significant) |
+| Live parser: answer in pool | 0.68 | 0.74 |
+| Gold topics: MRR@3 | 0.270 | 0.259 |
+
+The confidence threshold made no difference on dev and stays at 0.3.
 
 ## Output: `Candidate`
 

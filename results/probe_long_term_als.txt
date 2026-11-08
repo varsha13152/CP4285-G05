@@ -1,0 +1,23 @@
+=== backend: als ===
+Training time: 6.4s (factors=16, 15 iterations/epochs)
+
+Model diagnostic (V rows, by # big_matrix viewers):
+    bucket  videos  median ||v||  same-cat top-10
+       <10    1338        0.0013            0.101
+     10-49    1839        0.0035            0.129
+     50-99    1041        0.0078            0.145
+   100-499    2134        0.0194            0.164
+   500-999     658        0.0531            0.177
+       1k+    3718        0.1093            0.208
+
+w_query=0.5  (use_mf_score=True, top_k=100, α irrelevant)
+  MRR@3   anonymous=0.2695  none=0.1391  drop=+0.1305 [FAIL ≤ 0.01]
+  P@5     anonymous=0.1111  none=0.0593
+  nDCG@5  anonymous*=0.2371  none=0.2276  Δ=-0.0095 [-0.0232, +0.0033] ns  (n=185)
+  rare-answer rank (<50 viewers, absent=101): anonymous=45.6  none=67.6  Δ=+22.0  (n=175 case×video pairs)
+
+w_query=0.7  (use_mf_score=True, top_k=100, α irrelevant)
+  MRR@3   anonymous=0.2695  none=0.1613  drop=+0.1082 [FAIL ≤ 0.01]
+  P@5     anonymous=0.1111  none=0.0751
+  nDCG@5  anonymous*=0.2371  none=0.2313  Δ=-0.0059 [-0.0162, +0.0046] ns  (n=185)
+  rare-answer rank (<50 viewers, absent=101): anonymous=45.6  none=54.4  Δ=+8.8  (n=175 case×video pairs)

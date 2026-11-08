@@ -88,7 +88,7 @@ def test_missing_query_embedding_falls_back_to_category():
 def test_scores_features_and_sources():
     out = HybridRetriever(ITEMS, EMB, mode="hybrid").retrieve(_request())
     by_id = {c.video_id: c for c in out.candidates}
-    assert by_id[1].score == pytest.approx(1.0 + 0.5 * 0.9 + 0.2)
+    assert by_id[1].score == pytest.approx(1.0 + 0.1 * 0.9 + 0.2)
     assert by_id[1].source == RetrievalSource.BOTH
     assert by_id[4].source == RetrievalSource.CATEGORY
     assert by_id[3].source == RetrievalSource.SEMANTIC

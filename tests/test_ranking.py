@@ -106,6 +106,7 @@ def _profile(
     recent: list[int] | None = None,
     next_item: dict[int, float] | None = None,
     session_vector: list[float] | None = None,
+    user_vector: list[float] | None = None,
 ) -> EngagementProfile:
     ctx = None
     if recent is not None:
@@ -128,6 +129,7 @@ def _profile(
         cf_neighbour_scores=cf or {},
         social_scores=social or {},
         session_context=ctx,
+        user_vector=user_vector or [],
     )
 
 
@@ -340,3 +342,74 @@ class TestAlphaBlending:
         result = ranker.rank(_candidate_set(cands, profile=profile))
         # With budget normalisation, LT gets full weight → vid 20 wins.
         assert result.items[0].video_id == 20
+
+
+# ---------------------------------------------------------------------------
+# Tests — direct MF score (user_vector · V[video])
+# ---------------------------------------------------------------------------
+
+class TestMFScore:
+    """Optional 4th long-term signal: the raw ALS prediction U[user] · V[video]."""
+
+    @staticmethod
+    def _tied_cands() -> list[Candidate]:
+        # Equal query scores; default cat=1 with cat_dist {1: 1.0} → category
+        # affinity is constant (dead), no CF / social → MF alone decides.
+        return [_candidate(v, 0.5) for v in (10, 20, 30, 40, 50)]
+
+    def test_mf_score_boosts_aligned_video(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, w_query=0.5, use_mf_score=True)
+        profile = _profile(user_vector=[0.0, 0.0, 1.0, 0.0])
+        result = ranker.rank(_candidate_set(self._tied_cands(), profile=profile))
+        assert result.items[0].video_id == 40
+
+    def test_mf_score_off_by_default(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, w_query=0.5)
+        profile = _profile(user_vector=[0.0, 0.0, 1.0, 0.0])
+        cands = [_candidate(10, 0.9), _candidate(20, 0.7), _candidate(40, 0.5)]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        assert [it.video_id for it in result.items] == [10, 20, 40]
+
+    def test_cold_start_matches_anonymous(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, w_query=0.5, use_mf_score=True)
+        cands = [_candidate(10, 0.9), _candidate(20, 0.7), _candidate(40, 0.5)]
+        cold = ranker.rank(_candidate_set(cands, profile=_profile(user_vector=[])))
+        anon = ranker.rank(_candidate_set(cands, profile=None))
+        assert [it.video_id for it in cold.items] == [it.video_id for it in anon.items]
+
+    def test_dimension_mismatch_skips_signal(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, w_query=0.5, use_mf_score=True)
+        profile = _profile(user_vector=[0.0, 0.0, 1.0])  # 3-dim vs 4-dim factors
+        cands = [_candidate(10, 0.9), _candidate(20, 0.7), _candidate(40, 0.5)]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        # Signal skipped → query order unchanged.
+        assert [it.video_id for it in result.items] == [10, 20, 40]
+
+    def test_unknown_video_gets_median_fill(
+        self, item_factors: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        factors, ids = item_factors
+        ranker = QCSARRanker(factors, ids, w_query=0.5, use_mf_score=True)
+        profile = _profile(user_vector=[0.0, 0.0, 1.0, 0.0])
+        # MF: 10 → 0, 40 → 1, 60 → 0.5; unknown 999 → median 0.5 (ties 60).
+        cands = [
+            _candidate(10, 0.5), _candidate(40, 0.5),
+            _candidate(60, 0.5), _candidate(999, 0.5),
+        ]
+        result = ranker.rank(_candidate_set(cands, profile=profile))
+        order = [it.video_id for it in result.items]
+        assert order[0] == 40
+        assert order[-1] == 10
+        assert set(order[1:3]) == {60, 999}

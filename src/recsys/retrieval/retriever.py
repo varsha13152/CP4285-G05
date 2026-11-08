@@ -73,7 +73,10 @@ class HybridRetriever:
         with *items* (zero rows where ``has_text`` is False).
     mode : {"semantic", "category", "hybrid"}
     w_sem, w_cat, w_dur : float
-        Weights of the semantic, category and duration terms.
+        Weights of the semantic, category and duration terms. ``w_cat`` is
+        0.1 (was 0.5): at 0.5 the topic bonus outweighed the semantic spread of
+        the whole pool, so a parser topic that is a neighbouring category pushed
+        the answers out (``scripts/tune_topic_weight.py``).
     duration_scale_s : float
         Seconds outside the requested duration range at which the duration fit
         drops to ``1/e`` (soft target, never a filter).
@@ -85,7 +88,7 @@ class HybridRetriever:
         embeddings: np.ndarray,
         mode: str = "hybrid",
         w_sem: float = 1.0,
-        w_cat: float = 0.5,
+        w_cat: float = 0.1,
         w_dur: float = 0.2,
         duration_scale_s: float = 15.0,
     ) -> None:

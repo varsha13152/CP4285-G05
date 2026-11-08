@@ -196,3 +196,170 @@ The `category_distribution` from Stage 2's engagement profile gives a normalised
 | `scripts/run_pipeline.py` | Interactive pipeline demo (query → ranked list) |
 | `tests/fixtures/synthetic_queries.py` | 20 English synthetic evaluation queries |
 | `tests/fixtures/synthetic_queries_zh.py` | 20 Chinese synthetic evaluation queries |
+
+---
+
+## 8. Option 1: direct MF score
+
+**Change.** `QCSARRanker(use_mf_score=True)` adds the plain ALS prediction
+`mf[i] = user_vector · V[candidate_i]` (raw, un-normalised item factors) as a
+4th long-term signal next to CF, category affinity and social. Like the others
+it is rank-normalised inside `_active_mean`, so it is dropped automatically for
+cold-start users (empty `user_vector`). Candidates with no ALS row get the
+median of the known scores (neutral). A dimension mismatch between
+`user_vector` and the item factors logs a warning and skips the signal.
+Default is `False`, so rankings are unchanged until results justify switching.
+
+**Evaluation.** Two sweeps over α ∈ {0, 0.2, 0.4, 0.6, 0.8, 1.0} ×
+w_query ∈ {0.5, 0.6, 0.7} on the v3 test split, same code except the flag:
+
+```bash
+python scripts/sweep_alpha.py --alphas 0.0 0.2 0.4 0.6 0.8 1.0 --w-queries 0.5 0.6 0.7 --out results/alpha_sweep_baseline_rerun.json
+python scripts/sweep_alpha.py --alphas 0.0 0.2 0.4 0.6 0.8 1.0 --w-queries 0.5 0.6 0.7 --mf-score --out results/alpha_sweep_mf.json
+```
+
+Run-to-run noise: each sweep recomputes Stages 1–3, and the SOCLaaS query
+parser is not deterministic, so even the anonymous baseline moved between the
+two runs (MRR@3 0.1481 → 0.1502, anonymous* nDCG@5 0.1681 → 0.1711) although
+the flag cannot affect it. The deltas below are paired within each run
+(personalised vs anonymous on the same candidates), so compare deltas, not
+absolute values. "none" does not depend on α (no session → long-term only).
+
+| w_query (α = 0.4) | MF | none ΔnDCG@5 [95% CI] | none MRR@3 drop | none guardrail | related ΔnDCG@5 [95% CI] | related MRR@3 drop | realistic nDCG@5 | realistic MRR@3 |
+|---|---|---|---|---|---|---|---|---|
+| 0.5 | off | −0.0017 [−0.0177, +0.0129] | 0.061 | ✗ | +0.0024 [−0.0116, +0.0172] | 0.069 | 0.1668 | 0.0878 |
+| 0.5 | on  | −0.0062 [−0.0232, +0.0087] | 0.048 | ✗ | −0.0053 [−0.0223, +0.0111] | 0.061 | 0.1650 | 0.1018 |
+| 0.6 | off | −0.0010 [−0.0145, +0.0119] | 0.050 | ✗ | +0.0042 [−0.0091, +0.0181] | 0.056 | 0.1675 | 0.0989 |
+| 0.6 | on  | −0.0052 [−0.0211, +0.0091] | 0.050 | ✗ | −0.0048 [−0.0215, +0.0110] | 0.042 | 0.1658 | 0.1004 |
+| 0.7 | off | −0.0009 [−0.0141, +0.0118] | 0.051 | ✗ | +0.0036 [−0.0085, +0.0165] | 0.049 | 0.1674 | 0.0983 |
+| 0.7 | on  | −0.0084 [−0.0242, +0.0053] | 0.046 | ✗ | −0.0033 [−0.0190, +0.0115] | 0.037 | 0.1628 | 0.1053 |
+
+Across all 18 settings, with and without MF:
+- "none" passes the MRR@3 guardrail (drop ≤ 0.01) at **0/18** settings and its
+  nDCG@5 lift is significant at **0/18**.
+- The MF point estimate for "none" nDCG@5 is lower than without it at every
+  setting (−0.005 to −0.008 vs −0.001 to −0.002); every CI still contains 0.
+- MF shrinks the MRR@3 drop slightly at w_query 0.5 and 0.7 (by 0.005 to
+  0.013), still 4–5× over the guardrail. Realistic MRR@3 rises 0.002–0.014,
+  realistic nDCG@5 falls 0.002–0.005. Part of the MRR change is the run noise
+  above (≈ 0.002 on the anonymous baseline).
+
+**Verdict: don't adopt.** The direct MF score does not make personal
+preference measurably better (nDCG@5 lift not significant, point estimate
+lower) and does not bring "none" within the MRR@3 guardrail. Keep
+`use_mf_score=False`.
+
+---
+
+## 9. LightFM vs ALS (long-term probe)
+
+**Question.** ALS gives rarely-watched videos weak vectors. Does LightFM, which
+builds each video vector as the sum of id + category + tag feature vectors, fix
+that, and does it help long-term personalisation?
+
+**Setup** (`scripts/probe_long_term.py --backends als lightfm --w-queries 0.5 0.7`).
+v3 test split, 81 queries; cases `anonymous` (81) and `none` (405). Gold
+intents (no LLM) + one bge-m3 embedding per query; hybrid retrieval once per
+query, 200 candidates; ranking with `use_mf_score=True`, `top_k=100`. There are
+no recent videos, so short-term is inactive and α does not matter. Metric code
+is copied from `scripts/evaluate_ranking.py`. Raw output:
+`results/probe_long_term_als.txt`, `results/probe_long_term_lightfm.txt`.
+
+LightFM: 16 components, WARP, 15 epochs, seed 42; item features = identity +
+first/second/third-level caption category (UNKNOWN skipped) + `topic_tag`
+tags on ≥ 5 videos (831 shared features); user features = identity; biases
+dropped.
+
+| Backend | Training time |
+|---|---|
+| ALS (`implicit`, multi-threaded) | 6.4 s |
+| LightFM (single thread, no OpenMP on Windows) | 677 s |
+
+### Model diagnostic (item vectors `V`)
+
+Same-cat top-10 = share of a video's 10 nearest videos (cosine on `V`) with the
+same first-level caption category.
+
+| Viewers (big_matrix) | Videos | ALS median ‖v‖ | LightFM median ‖v‖ | ALS same-cat top-10 | LightFM same-cat top-10 |
+|---|---|---|---|---|---|
+| < 10 | 1338 | 0.0013 | 1.239 | 0.101 | 0.923 |
+| 10–49 | 1839 | 0.0035 | 1.079 | 0.129 | 0.886 |
+| 50–99 | 1041 | 0.0078 | 1.014 | 0.145 | 0.872 |
+| 100–499 | 2134 | 0.0194 | 1.056 | 0.164 | 0.838 |
+| 500–999 | 658 | 0.0531 | 1.188 | 0.177 | 0.799 |
+| 1k+ | 3718 | 0.1093 | 1.378 | 0.208 | 0.761 |
+
+LightFM removes the norm collapse (rare and popular vectors are now the same
+scale). Its same-category share is high **partly by construction**: the
+category is one of the summed features, and for rare videos the id vector is
+barely trained, so those videos sit near their category vector. It shows the
+features are used, not that the vectors are better.
+
+### Ranking (none vs anonymous)
+
+Guardrail: MRR@3 drop ≤ 0.01. nDCG@5 = personal (condensed list, watch_ratio
+capped at 5), none vs anonymous*, paired bootstrap 95% CI, n = 185.
+Rare-answer rank = mean rank of answer videos with < 50 viewers (absent from
+the top 100 = 101), n = 175 case × video pairs; anonymous = 45.6 for both.
+
+| w_query | Backend | MRR@3 none (anon 0.2695) | MRR@3 drop | ΔnDCG@5 [95% CI] | Rare-answer rank none (Δ vs anon) |
+|---|---|---|---|---|---|
+| 0.5 | ALS | 0.1391 | +0.1305 ✗ | −0.0095 [−0.0232, +0.0033] ns | 67.6 (+22.0) |
+| 0.5 | LightFM | 0.1333 | +0.1362 ✗ | −0.0024 [−0.0142, +0.0098] ns | 60.6 (+15.0) |
+| 0.7 | ALS | 0.1613 | +0.1082 ✗ | −0.0059 [−0.0162, +0.0046] ns | 54.4 (+8.8) |
+| 0.7 | LightFM | 0.1737 | +0.0959 ✗ | +0.0011 [−0.0073, +0.0096] ns | 51.2 (+5.7) |
+
+LightFM is ahead on every point estimate at w_query = 0.7 and buries rare
+answers less at both settings (about a third less), but no nDCG@5 difference
+is significant and both backends fail the MRR@3 guardrail by ~10× the allowed
+drop. That matches the earlier finding: the long-term signal in the "none"
+condition never passes the guardrail.
+
+**Verdict: inconclusive.** LightFM fixes the rare-video vectors and buries rare
+answers less, but it gives no significant nDCG@5 lift, does not rescue the
+MRR@3 guardrail, and trains ~100× slower here. Keep `backend="als"` as the
+default.
+
+**Install note (Windows).** `pip install lightfm` (1.17) fails on Python 3.12:
+the C code shipped in the package uses CPython internals removed in 3.12
+(`curexc_traceback`, `ob_digit`). On Python 3.11 it builds (via
+`setup.py bdist_wheel`, since its `setup.py` breaks under pip's isolated
+build), but WARP/BPR then crash with an access violation: `rand_r` casts to
+`long`, which is 32-bit on Windows, so negative samples get negative indices.
+The numbers above use 1.17 with that one cast changed to `long long` (matches
+Linux behaviour).
+
+## 10. Evaluation fix: on-topic labels
+
+**Date:** 2026-11-09
+
+Metric 2 (personal nDCG@5) grades a video by the user's `watch_ratio` only if
+it is on-topic for the query. The scripts decided "on-topic" with the `feat`
+tags of `item_categories.csv`, but the query topics are caption first-level
+category ids. The two number categories differently:
+
+* `feat` only has ids 0–30, so topics 31+ (Fitness, Short Drama, Military,
+  Real Estate/Home, Oddities, Film & TV) never matched.
+* Some ids barely agree (small_matrix videos whose caption topic is matched by
+  the same `feat` id: Politics/News 0 of 15, Science & Law 3 of 38,
+  Tech/Digital 5 of 21, Fashion 51 of 124).
+* `feat` is multi-label, so off-topic videos counted as on-topic (Daily Life:
+  426 counted vs 122 by caption).
+
+`evaluate_ranking.py`, `sweep_alpha.py`, `tune_weights.py` and
+`probe_long_term.py` now use `video_topic_sets` (caption first-level ids).
+Effect, measured with gold intents and a 200-candidate pool (anonymous MRR@3 is
+unchanged by the fix):
+
+| | dev, `feat` | dev, caption | test, `feat` | test, caption |
+|---|---|---|---|---|
+| Personal cases that can never score | 30/225 | 0/225 | 15/555 | 0/555 |
+| nDCG@5 personalised, w_query = 0.5 | 0.244 | 0.328 | 0.233 | 0.329 |
+| nDCG@5 lift, w_query = 0.5 [95% CI] | +0.001 [−0.010, +0.012] | −0.001 [−0.013, +0.011] | −0.004 [−0.011, +0.003] | −0.008 [−0.016, +0.001] |
+| nDCG@5 lift, w_query = 0.7 [95% CI] | −0.005 [−0.013, +0.003] | −0.005 [−0.014, +0.004] | +0.001 [−0.004, +0.005] | +0.004 [−0.000, +0.009] |
+
+The level of nDCG@5 rises because more videos are graded, but no verdict
+changes: the pooled personal lift is still not significant, and the only
+significant per-condition lifts are negative (test "none" at w_query = 0.5:
+−0.016 [−0.032, −0.002]; dev "related" at 0.7: −0.018 [−0.036, −0.001]). Results in sections 2–9
+were computed with the old `feat` labels and Stage 3 topic weight 0.5.

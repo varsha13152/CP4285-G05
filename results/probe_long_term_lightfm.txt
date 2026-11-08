@@ -1,0 +1,24 @@
+=== backend: lightfm ===
+Training time: 677.2s (factors=16, 15 iterations/epochs)
+LightFM item features: 10728 ids + 831 shared (category levels + tags)
+
+Model diagnostic (V rows, by # big_matrix viewers):
+    bucket  videos  median ||v||  same-cat top-10
+       <10    1338        1.2394            0.923
+     10-49    1839        1.0792            0.886
+     50-99    1041        1.0138            0.872
+   100-499    2134        1.0559            0.838
+   500-999     658        1.1876            0.799
+       1k+    3718        1.3779            0.761
+
+w_query=0.5  (use_mf_score=True, top_k=100, α irrelevant)
+  MRR@3   anonymous=0.2695  none=0.1333  drop=+0.1362 [FAIL ≤ 0.01]
+  P@5     anonymous=0.1111  none=0.0607
+  nDCG@5  anonymous*=0.2371  none=0.2347  Δ=-0.0024 [-0.0142, +0.0098] ns  (n=185)
+  rare-answer rank (<50 viewers, absent=101): anonymous=45.6  none=60.6  Δ=+15.0  (n=175 case×video pairs)
+
+w_query=0.7  (use_mf_score=True, top_k=100, α irrelevant)
+  MRR@3   anonymous=0.2695  none=0.1737  drop=+0.0959 [FAIL ≤ 0.01]
+  P@5     anonymous=0.1111  none=0.0760
+  nDCG@5  anonymous*=0.2371  none=0.2382  Δ=+0.0011 [-0.0073, +0.0096] ns  (n=185)
+  rare-answer rank (<50 viewers, absent=101): anonymous=45.6  none=51.2  Δ=+5.7  (n=175 case×video pairs)

@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import pathlib
 import sys
@@ -23,7 +22,6 @@ import time
 from types import SimpleNamespace
 
 import numpy as np
-import pandas as pd
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -48,6 +46,10 @@ def main() -> None:
     ap.add_argument("--alphas", type=float, nargs="+",
                     default=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
     ap.add_argument("--w-queries", type=float, nargs="+", default=[0.5])
+    ap.add_argument("--mf-score", action="store_true",
+                    help="Add the direct MF score (user_vector · V) as a long-term signal")
+    ap.add_argument("--out", default="results/alpha_sweep.json",
+                    help="Output JSON path (default: results/alpha_sweep.json)")
     args = ap.parse_args()
 
     from tests.fixtures.query_sets import load_queries
@@ -100,7 +102,7 @@ def main() -> None:
         ranker_base["caption_embeddings"] = emb_data["embeddings"]
         ranker_base["caption_video_ids"] = emb_data["video_ids"]
 
-    from recsys.data.schema import FEAT, USER_ID, VIDEO_ID, WATCH_RATIO
+    from recsys.data.schema import USER_ID, VIDEO_ID, WATCH_RATIO
 
     # Ground truth
     user_gt: dict[int, dict[int, float]] = {}
@@ -110,12 +112,10 @@ def main() -> None:
         wr = float(getattr(row, WATCH_RATIO))
         user_gt.setdefault(uid, {})[vid] = wr
 
-    vid_cats: dict[int, set[int]] = {}
-    df_cats = pd.read_csv(f"{args.data_dir}/item_categories.csv")
-    for row in df_cats.itertuples(index=False):
-        feat_val = getattr(row, FEAT)
-        cats = ast.literal_eval(feat_val) if isinstance(feat_val, str) else feat_val
-        vid_cats[int(getattr(row, VIDEO_ID))] = set(cats)
+    # "on-topic" = caption first-level id, the same id space as the query topics
+    from recsys.data.item_features import video_topic_sets
+
+    vid_cats = video_topic_sets(args.data_dir)
 
     # ------------------------------------------------------------------
     # 2. Cache CandidateSets (Stages 1-3) — the expensive part
@@ -162,6 +162,7 @@ def main() -> None:
         for alpha in args.alphas:
             ranker = QCSARRanker(
                 **ranker_base, alpha=alpha, w_query=w_query, top_k=100,
+                use_mf_score=args.mf_score,
             )
 
             conds = ["anonymous", "anonymous*", "none", "related", "unrelated"]
@@ -278,7 +279,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 4. Save
     # ------------------------------------------------------------------
-    out_path = "results/alpha_sweep.json"
+    out_path = args.out
     pathlib.Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(results_all, f, indent=2)

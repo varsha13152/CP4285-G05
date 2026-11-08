@@ -16,6 +16,8 @@ Long-term composite (mean of rank-normalised sub-signals):
     • CF neighbour scores  (kNN collaborative filtering)
     • Category affinity    (user's habitual categories)
     • Social scores        (friends' watch ratios)
+    • MF score             (``user_vector · V[video]``, the direct ALS
+                            prediction; only when ``use_mf_score=True``)
 
 Short-term composite (mean of rank-normalised sub-signals):
     • Markov transition P(next | last watched)
@@ -70,6 +72,12 @@ class QCSARRanker:
         ``0.0`` = rank by personal signals only.  Default ``0.5``.
     top_k : int
         Maximum items in the final ``RankedList``.
+    use_mf_score : bool
+        If ``True``, add the direct matrix-factorisation prediction
+        ``profile.user_vector · item_factors[video]`` (raw, un-normalised
+        factors) as a 4th long-term signal.  Skipped for cold-start users
+        (empty ``user_vector``) and when the user vector's dimension does
+        not match the item factors.  Default ``False`` (behaviour unchanged).
     """
 
     def __init__(
@@ -82,11 +90,15 @@ class QCSARRanker:
         alpha: float = 0.5,
         w_query: float = 0.5,
         top_k: int = 20,
+        use_mf_score: bool = False,
     ) -> None:
         if not 0.0 <= alpha <= 1.0:
             raise ValueError(f"alpha must be in [0, 1], got {alpha}")
         if not 0.0 <= w_query <= 1.0:
             raise ValueError(f"w_query must be in [0, 1], got {w_query}")
+
+        # Raw ALS factors for the direct MF prediction U[user] · V[video].
+        self._als_raw: np.ndarray = np.asarray(item_factors, dtype=np.float64)
 
         # L2-normalise ALS factors for cosine similarity via dot product.
         norms = np.linalg.norm(item_factors, axis=1, keepdims=True)
@@ -109,6 +121,7 @@ class QCSARRanker:
         self._alpha = alpha
         self._w_query = w_query
         self._top_k = top_k
+        self._use_mf_score = use_mf_score
 
     # ------------------------------------------------------------------
     # Public API (Ranker protocol)
@@ -136,6 +149,7 @@ class QCSARRanker:
         cf_arr = np.zeros(n, dtype=np.float64)
         cat_aff_arr = np.zeros(n, dtype=np.float64)
         social_arr = np.zeros(n, dtype=np.float64)
+        mf_arr = np.zeros(n, dtype=np.float64)
 
         if profile is not None:
             cf_scores = profile.cf_neighbour_scores
@@ -147,7 +161,13 @@ class QCSARRanker:
                 if c.category_ids and cat_dist:
                     cat_aff_arr[i] = cat_dist.get(c.category_ids[0], 0.0)
 
-        long_term = self._active_mean([cf_arr, cat_aff_arr, social_arr])
+            if self._use_mf_score and profile.user_vector:
+                mf_arr = self._mf_scores(cands, profile.user_vector)
+
+        lt_signals = [cf_arr, cat_aff_arr, social_arr]
+        if self._use_mf_score:
+            lt_signals.append(mf_arr)
+        long_term = self._active_mean(lt_signals)
 
         # --- Short-term personal signals ---
         markov_arr = np.zeros(n, dtype=np.float64)
@@ -238,6 +258,37 @@ class QCSARRanker:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _mf_scores(
+        self, cands: list[Candidate], user_vector: list[float],
+    ) -> np.ndarray:
+        """Direct MF prediction ``user_vector · V[video]`` per candidate.
+
+        Candidates without an ALS row get the median of the known scores
+        (neutral: dot products can be negative, so 0 is not neutral).
+        Returns all zeros (a dead signal) when the dimensions disagree or
+        no candidate has an ALS row.
+        """
+        n = len(cands)
+        u = np.asarray(user_vector, dtype=np.float64)
+        if u.shape[0] != self._als_raw.shape[1]:
+            logger.warning(
+                "user_vector dim %d != item factor dim %d; skipping MF score "
+                "(user and item factors come from different ALS runs)",
+                u.shape[0], self._als_raw.shape[1],
+            )
+            return np.zeros(n, dtype=np.float64)
+
+        rows = np.array(
+            [self._vid_to_als.get(c.video_id, -1) for c in cands], dtype=np.int64,
+        )
+        known = rows >= 0
+        mf = np.zeros(n, dtype=np.float64)
+        if not known.any():
+            return mf
+        mf[known] = self._als_raw[rows[known]] @ u
+        mf[~known] = float(np.median(mf[known]))
+        return mf
 
     def _active_mean(self, raw_signals: list[np.ndarray]) -> np.ndarray:
         """Mean of rank-normalised signals, excluding all-zero signals.
