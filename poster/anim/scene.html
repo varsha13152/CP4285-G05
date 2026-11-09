@@ -1,0 +1,355 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>QCSAR For You</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=block" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1280px;height:720px;background:#05060d;overflow:hidden}
+body{font-family:'Poppins','Segoe UI',sans-serif;color:#fff;-webkit-font-smoothing:antialiased}
+#stage{position:absolute;inset:0;overflow:hidden;background:#05060f}
+.abs{position:absolute}
+#glowL{left:-260px;top:120px;width:900px;height:760px;background:radial-gradient(closest-side,rgba(40,80,255,.26),rgba(40,80,255,0))}
+#glowR{left:640px;top:80px;width:900px;height:800px;background:radial-gradient(closest-side,rgba(255,60,120,.24),rgba(255,60,120,0))}
+#glowC{left:340px;top:300px;width:600px;height:360px;background:radial-gradient(closest-side,rgba(150,70,255,.18),rgba(150,70,255,0))}
+.star{position:absolute;width:2px;height:2px;border-radius:50%;background:#cfd8ff}
+
+/* title */
+#title{left:330px;width:620px;top:24px;text-align:center}
+#t1{font-size:32px;font-weight:700;line-height:40px;letter-spacing:.3px}
+#t2{font-size:62px;font-weight:800;line-height:72px;letter-spacing:-.5px}
+#t3{font-size:40px;font-weight:800;line-height:48px}
+.tl{display:block;will-change:transform}
+.g1{background:linear-gradient(90deg,#ff5050,#ff3d8b 60%,#e044e0);-webkit-background-clip:text;background-clip:text;color:transparent}
+.g2{background:linear-gradient(90deg,#b05cff,#6f6bff 50%,#3b8bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* phones */
+.phone{width:280px;height:520px;border-radius:40px}
+#phoneL{left:56px;top:150px;border:2px solid rgba(80,120,255,.75);background:linear-gradient(180deg,rgba(14,22,54,.96),rgba(7,11,30,.97));box-shadow:0 0 34px rgba(50,90,255,.38),inset 0 0 24px rgba(50,90,255,.14)}
+.searchbar{position:absolute;left:16px;right:16px;top:20px;height:48px;border-radius:24px;background:rgba(40,52,90,.75);border:1px solid rgba(120,150,255,.25);display:flex;align-items:center;padding:0 14px;font-size:17px;font-weight:500;color:#e8ecff}
+.searchbar svg{flex:none;margin-right:10px}
+#caret{display:inline-block;width:2px;height:20px;background:#9fb4ff;margin-left:2px}
+.clear{margin-left:auto;width:20px;height:20px;border-radius:50%;border:1.5px solid #9aa6c8;color:#9aa6c8;font-size:13px;line-height:16px;text-align:center}
+.reslabel{position:absolute;left:20px;top:84px;font-size:12px;font-weight:600;letter-spacing:1.6px;color:#8590b8}
+.row{position:absolute;left:16px;right:16px;height:76px;display:flex;gap:12px;align-items:center}
+.row img{width:104px;height:76px;object-fit:cover;border-radius:8px;filter:grayscale(.85) brightness(.85)}
+.lines{flex:1;display:flex;flex-direction:column;gap:9px}
+.lines i{display:block;height:8px;border-radius:4px;background:rgba(120,135,180,.32)}
+#sad{left:110px;top:456px;width:56px;height:56px}
+
+#phoneRwrap{left:944px;top:150px;padding:2px;background:linear-gradient(160deg,#ff4d8d,#ff7a3d 50%,#c04dff)}
+#phoneR{width:276px;height:516px;border-radius:38px;background:linear-gradient(180deg,#0c0a16,#0a0812);position:relative;overflow:hidden}
+.tabs{position:absolute;top:16px;left:0;right:0;text-align:center;font-size:15px;font-weight:600}
+.tabs span{margin:0 10px}
+.tabs .off{color:#8a8aa0;font-weight:500}
+.tabs .on u{position:absolute;left:50%;margin-left:20px;top:26px;width:30px;height:2.5px;border-radius:2px;background:#fff;text-decoration:none}
+#video{position:absolute;left:12px;right:12px;top:52px;height:404px;border-radius:18px;overflow:hidden;background:#000}
+#video img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;transform-origin:50% 60%}
+#vshade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 60%,rgba(0,0,0,.55))}
+#vdark{position:absolute;inset:0;background:#07060c}
+#loader{position:absolute;left:50%;top:50%;margin:-6px 0 0 -30px;width:60px;height:12px;display:flex;justify-content:space-between}
+#loader b{width:12px;height:12px;border-radius:50%;background:#ff5a8a}
+.side{position:absolute;right:8px;width:44px;text-align:center;font-size:12px;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.side svg{display:block;margin:0 auto 2px}
+.cap{position:absolute;left:14px;height:8px;border-radius:4px;background:rgba(255,255,255,.55)}
+#avatar{position:absolute;right:9px;bottom:14px;width:40px;height:40px;border-radius:50%;border:2px solid #fff;background:linear-gradient(135deg,#ff7a3d,#c04dff);display:flex;align-items:center;justify-content:center}
+.nav{position:absolute;left:0;right:0;bottom:0;height:56px;border-top:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-around;align-items:center}
+.plus{width:40px;height:28px;border-radius:8px;background:#fff;box-shadow:-3px 0 0 #ff7a3d,3px 0 0 #c04dff;display:flex;align-items:center;justify-content:center;color:#111;font-weight:700;font-size:20px;line-height:1}
+
+/* bubbles */
+.bubble{position:absolute;font-weight:600;text-align:center;will-change:transform}
+.bubble .body{position:relative;border-radius:46px;display:flex;align-items:center;justify-content:center;line-height:1.2}
+.bubble .tail{position:absolute;width:34px;height:30px}
+#bubL{left:40px;top:34px;filter:drop-shadow(0 0 16px rgba(60,110,255,.55));transform-origin:80% 100%}
+#bubL .body{width:250px;height:92px;font-size:24px;background:linear-gradient(135deg,#123fa8,#0a2672);border:1.5px solid rgba(110,150,255,.6)}
+#bubL .tail{left:196px;top:86px;background:#0c2b80;clip-path:polygon(0 0,100% 0,85% 100%)}
+#bubR{left:984px;top:30px;filter:drop-shadow(0 0 18px rgba(255,70,130,.55));transform-origin:15% 100%}
+#bubR .body{width:270px;height:96px;font-size:22px;background:linear-gradient(110deg,#c23bd8,#ff4f7b 55%,#ff8a3d)}
+#bubR .tail{left:30px;top:90px;background:#d040c0;clip-path:polygon(0 0,100% 0,10% 100%)}
+.emoji{font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif;font-size:24px}
+
+/* core */
+#qcsar{left:340px;width:600px;top:214px;text-align:center;font-size:46px;font-weight:800;letter-spacing:6px;line-height:56px}
+#qcsar span{display:inline-block;will-change:transform}
+#qsub{left:340px;width:600px;top:262px;text-align:center;font-size:12px;font-weight:600;letter-spacing:3px;color:#8a90b8}
+.card{position:absolute;top:292px;width:176px;height:116px;border-radius:18px;background:rgba(12,13,30,.9);border:1.5px solid var(--c);box-shadow:0 0 22px color-mix(in srgb,var(--c) 35%,transparent);text-align:center;will-change:transform}
+.card .ic{width:50px;height:50px;margin:12px auto 6px;border-radius:50%;border:2.5px solid var(--c);display:flex;align-items:center;justify-content:center;box-shadow:0 0 14px color-mix(in srgb,var(--c) 60%,transparent)}
+.card .lab{font-size:15px;font-weight:600;line-height:19px}
+.card .lab b{color:var(--c);font-weight:800}
+
+#flow{left:0;top:0;width:1280px;height:720px;overflow:visible}
+
+#tag{left:330px;width:620px;top:606px;text-align:center;font-size:24px;font-weight:500;line-height:34px}
+#tag .tl{display:block}
+.tb{color:#7c8cff;font-weight:600}
+.tp{background:linear-gradient(90deg,#ff4d8d,#ff8a3d);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600}
+.tv{color:#c07cff;font-weight:600}
+
+#fade{inset:0;background:#05060f;pointer-events:none}
+</style></head>
+<body>
+<div id="stage">
+  <div id="glowL" class="abs"></div>
+  <div id="glowR" class="abs"></div>
+  <div id="glowC" class="abs"></div>
+  <div id="stars"></div>
+
+  <svg id="flow" class="abs" viewBox="0 0 1280 720">
+    <defs>
+      <linearGradient id="fg" gradientUnits="userSpaceOnUse" x1="336" y1="0" x2="940" y2="0">
+        <stop offset="0" stop-color="#3b6bff"/>
+        <stop offset=".38" stop-color="#8b5cf6"/>
+        <stop offset=".7" stop-color="#ec4899"/>
+        <stop offset="1" stop-color="#ff7a3d"/>
+      </linearGradient>
+      <linearGradient id="ag" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#ff4f7b"/>
+        <stop offset="1" stop-color="#ff8a3d"/>
+      </linearGradient>
+      <filter id="glow" x="-20%" y="-50%" width="140%" height="200%">
+        <feGaussianBlur stdDeviation="4" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <filter id="glow2" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="7" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g id="streams" filter="url(#glow)"></g>
+    <g id="parts" filter="url(#glow)"></g>
+    <polygon id="arrow" points="884,452 940,484 884,516 896,484" fill="url(#ag)" filter="url(#glow2)"/>
+  </svg>
+
+  <!-- title -->
+  <div id="title" class="abs">
+    <span id="t1" class="tl">Bringing the</span>
+    <span id="t2" class="tl"><span class="g1">“For You”</span> <span class="g2">Page</span></span>
+    <span id="t3" class="tl">into Search.</span>
+  </div>
+
+  <!-- left phone -->
+  <div id="phoneL" class="abs phone">
+    <div class="searchbar">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c9d3ff" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <span id="typed"></span><span id="caret"></span>
+      <div class="clear">×</div>
+    </div>
+    <div id="resLabel" class="reslabel">SEARCH RESULTS</div>
+    <div class="row" id="row0" style="top:108px"><img src="assets/thumb0.png"><div class="lines"><i style="width:82%"></i><i style="width:100%"></i><i style="width:48%"></i></div></div>
+    <div class="row" id="row1" style="top:194px"><img src="assets/thumb1.png"><div class="lines"><i style="width:76%"></i><i style="width:96%"></i><i style="width:56%"></i></div></div>
+    <div class="row" id="row2" style="top:280px"><img src="assets/thumb2.png"><div class="lines"><i style="width:86%"></i><i style="width:92%"></i><i style="width:44%"></i></div></div>
+    <div class="row" id="row3" style="top:366px"><img src="assets/thumb3.png"><div class="lines"><i style="width:72%"></i><i style="width:100%"></i><i style="width:52%"></i></div></div>
+    <svg id="sad" class="abs" viewBox="0 0 56 56" fill="none" stroke="#4d74ff" stroke-width="3" stroke-linecap="round"><circle cx="28" cy="28" r="25"/><circle cx="20" cy="23" r="1.6" fill="#4d74ff"/><circle cx="36" cy="23" r="1.6" fill="#4d74ff"/><path id="mouth" d="M18 40 Q28 31 38 40"/></svg>
+  </div>
+
+  <!-- core -->
+  <div id="qcsar" class="abs"><span id="q0">Q</span><span id="q1">C</span><span id="q2">S</span><span id="q3">A</span><span id="q4">R</span></div>
+  <div class="card" id="card0" style="left:360px;--c:#4f7bff">
+    <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4f7bff" stroke-width="2.6" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></div>
+    <div class="lab"><b>Q</b>uery-<br><b>C</b>onditioned</div>
+  </div>
+  <div class="card" id="card1" style="left:552px;--c:#b45cff">
+    <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#b45cff" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="8.5" r="4"/><path d="M4.5 20.5c1.2-4 4-6 7.5-6s6.3 2 7.5 6"/></svg></div>
+    <div class="lab"><b>S</b>ession-<br><b>A</b>ware</div>
+  </div>
+  <div class="card" id="card2" style="left:744px;--c:#ff5a7e">
+    <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="#ff5a7e"><rect x="3" y="13" width="4" height="8" rx="1"/><rect x="10" y="8" width="4" height="13" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg></div>
+    <div class="lab">Personalized<br><b>R</b>anking</div>
+  </div>
+
+  <!-- right phone -->
+  <div id="phoneRwrap" class="abs phone">
+    <div id="phoneR">
+      <div class="tabs"><span class="off">Following</span><span class="on">For You<u></u></span></div>
+      <div id="video">
+        <img id="sunset" src="assets/sunset_check.png">
+        <div id="vshade"></div>
+        <div class="side" id="s0" style="top:170px"><svg id="heart" width="34" height="32" viewBox="0 0 24 22"><path d="M12 21s-9-5.6-9-12.2C3 5.4 5.4 3 8.3 3c1.6 0 3 .8 3.7 2 .7-1.2 2.1-2 3.7-2C18.6 3 21 5.4 21 8.8 21 15.4 12 21 12 21z" fill="#ff2d55"/></svg><span id="likes">3.2K</span></div>
+        <div class="side" id="s1" style="top:232px"><svg width="32" height="30" viewBox="0 0 24 22"><path d="M12 2C6.5 2 2 5.8 2 10.5c0 2.6 1.4 4.9 3.6 6.5L5 21l4.3-2.4c.9.2 1.8.4 2.7.4 5.5 0 10-3.8 10-8.5S17.5 2 12 2z" fill="#fff"/><circle cx="8" cy="10.5" r="1.3" fill="#222"/><circle cx="12" cy="10.5" r="1.3" fill="#222"/><circle cx="16" cy="10.5" r="1.3" fill="#222"/></svg><span id="cmts">128</span></div>
+        <div class="side" id="s2" style="top:294px"><svg width="32" height="28" viewBox="0 0 24 20"><path d="M14 1l9 8.5-9 8.5v-5C8 13 4 15 1 19.5 2 12.5 6 8 14 6.8z" fill="#fff"/></svg><span id="shares">342</span></div>
+        <div class="cap" id="c0" style="bottom:42px;width:110px"></div>
+        <div class="cap" id="c1" style="bottom:24px;width:170px;background:rgba(255,255,255,.35)"></div>
+        <div id="avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><circle cx="12" cy="8" r="4.5"/><path d="M3.5 22c1-5 4.4-8 8.5-8s7.5 3 8.5 8z"/></svg></div>
+        <div id="vdark"><div id="loader"><b></b><b></b><b></b></div></div>
+      </div>
+      <div class="nav">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><path d="M12 3 2.5 11h2.5v9.5h5v-6h4v6h5V11h2.5z"/></svg>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+        <div class="plus">+</div>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="5" width="18" height="13" rx="3"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01" stroke-width="2.6" stroke-linecap="round"/></svg>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- bubbles -->
+  <div id="bubL" class="bubble"><div class="body">I searched<br>for it…</div><div class="tail"></div></div>
+  <div id="bubR" class="bubble"><div class="body"><span>…but found it<br>on my For You <span class="emoji">😍</span></span></div><div class="tail"></div></div>
+
+  <!-- tagline -->
+  <div id="tag" class="abs">
+    <span id="tg1" class="tl">Search that <span class="tb">understands</span> <span class="tv">you.</span></span>
+    <span id="tg2" class="tl">Results that <span class="tv">feel like</span> <span class="tp">For You.</span></span>
+  </div>
+
+  <div id="fade" class="abs"></div>
+</div>
+
+<script>
+const T = 9.0;
+const $ = id => document.getElementById(id);
+const cl = x => Math.max(0, Math.min(1, x));
+const seg = (t, a, b) => cl((t - a) / (b - a));
+const eo = x => 1 - Math.pow(1 - x, 3);
+const eb = x => { const c1 = 1.9, c3 = c1 + 1; return x <= 0 ? 0 : 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+function tf(el, o, tx = 0, ty = 0, s = 1) {
+  el.style.opacity = o;
+  el.style.transform = `translate(${tx}px,${ty}px) scale(${s})`;
+}
+
+// deterministic pseudo-random
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+// stars
+const stars = [];
+for (let i = 0; i < 70; i++) {
+  const d = document.createElement('div'); d.className = 'star';
+  d.style.left = (rnd() * 1280) + 'px'; d.style.top = (rnd() * 720) + 'px';
+  const s = rnd() < .2 ? 3 : 2; d.style.width = d.style.height = s + 'px';
+  $('stars').appendChild(d); stars.push({ el: d, ph: rnd() * 6.28, base: .15 + rnd() * .35 });
+}
+
+// streams
+const NS = 10, streams = [], NS_ = 'http://www.w3.org/2000/svg';
+const rowY = [298, 384, 470, 556];
+for (let i = 0; i < NS; i++) {
+  const s = (i - (NS - 1) / 2) / ((NS - 1) / 2);         // -1..1
+  const y0 = rowY[Math.floor(i * 4 / NS)] + ((i % 3) - 1) * 10;
+  const d = `M 336 ${y0} C 450 ${y0}, 520 ${500 + s * 34}, 640 ${502 + s * 24} S 820 ${484 + s * 3}, 892 484`;
+  const p = document.createElementNS(NS_, 'path');
+  p.setAttribute('d', d); p.setAttribute('fill', 'none'); p.setAttribute('stroke', 'url(#fg)');
+  p.setAttribute('stroke-linecap', 'round');
+  p.setAttribute('stroke-width', (1.2 + rnd() * 1.6).toFixed(2));
+  $('streams').appendChild(p);
+  const len = p.getTotalLength();
+  p.style.strokeDasharray = len; streams.push({ p, len, delay: rnd() * .35, op: .55 + rnd() * .45 });
+}
+// central ribbon
+{
+  const p = document.createElementNS(NS_, 'path');
+  p.setAttribute('d', 'M 336 430 C 450 430, 520 505, 640 504 S 820 484, 892 484');
+  p.setAttribute('fill', 'none'); p.setAttribute('stroke', 'url(#fg)'); p.setAttribute('stroke-width', '7');
+  p.setAttribute('stroke-linecap', 'round');
+  $('streams').appendChild(p);
+  const len = p.getTotalLength(); p.style.strokeDasharray = len;
+  streams.push({ p, len, delay: .15, op: 1 });
+}
+// particles
+const parts = [];
+for (let i = 0; i < 26; i++) {
+  const c = document.createElementNS(NS_, 'circle');
+  c.setAttribute('r', (1.6 + rnd() * 2).toFixed(2)); c.setAttribute('fill', '#fff');
+  $('parts').appendChild(c);
+  parts.push({ c, s: streams[Math.floor(rnd() * streams.length)], ph: rnd(), sp: .45 + rnd() * .35 });
+}
+
+const fmt = n => n < 1000 ? String(Math.round(n)) : (n / 1000).toFixed(1) + 'K';
+
+window.render = function (t) {
+  // global fade in/out for seamless loop
+  $('fade').style.opacity = Math.max(1 - seg(t, 0, .45), seg(t, T - .45, T));
+
+  // ambient
+  const w = 2 * Math.PI * t / T;
+  $('glowL').style.opacity = .85 + .15 * Math.sin(w * 2);
+  $('glowR').style.opacity = (.45 + .55 * eo(seg(t, 4.8, 5.8))) * (.88 + .12 * Math.sin(w * 2 + 1.5));
+  $('glowC').style.opacity = .3 + .7 * eo(seg(t, 3.4, 4.6));
+  for (const s of stars) s.el.style.opacity = s.base * (.6 + .4 * Math.sin(w * 3 + s.ph));
+
+  // title
+  [['t1', .25], ['t2', .42], ['t3', .6]].forEach(([id, a]) => {
+    const p = eo(seg(t, a, a + .6)); tf($(id), p, 0, (1 - p) * 26);
+  });
+
+  // left phone
+  { const p = eo(seg(t, .55, 1.3)); tf($('phoneL'), p, (1 - p) * -60); }
+  { const p = eb(seg(t, 1.05, 1.5)); $('bubL').style.opacity = cl(seg(t, 1.05, 1.25)); $('bubL').style.transform = `scale(${.4 + .6 * p})`; }
+  // typing
+  const q = 'sunset beach';
+  const n = Math.floor(q.length * seg(t, 1.35, 2.25));
+  $('typed').textContent = q.slice(0, n);
+  $('caret').style.opacity = (t > 1.2 && (t < 2.3 || Math.floor(t * 2.4) % 2 === 0)) ? 1 : 0;
+  $('resLabel').style.opacity = eo(seg(t, 2.25, 2.6));
+  for (let i = 0; i < 4; i++) {
+    const p = eo(seg(t, 2.35 + i * .16, 2.8 + i * .16)); tf($('row' + i), p, 0, (1 - p) * 18);
+  }
+  { const p = eb(seg(t, 3.0, 3.45)); $('sad').style.opacity = cl(seg(t, 3.0, 3.2)); $('sad').style.transform = `scale(${.3 + .7 * p}) translateY(${Math.sin(t * 5) * (t > 3.5 && t < 4 ? 1.5 : 0)}px)`; }
+
+  // QCSAR letters + cards
+  const letterAt = [3.35, 3.45, 3.75, 3.85, 4.15];
+  const cols = ['#4f7bff', '#4f7bff', '#b45cff', '#b45cff', '#ff5a7e'];
+  for (let i = 0; i < 5; i++) {
+    const a = letterAt[i], p = eb(seg(t, a, a + .4));
+    const el = $('q' + i);
+    el.style.opacity = cl(seg(t, a, a + .15));
+    el.style.transform = `translateY(${(1 - p) * 22}px) scale(${.6 + .4 * p})`;
+    // flash color briefly as its card lands, settle to white
+    const flash = seg(t, a, a + .2) * (1 - seg(t, a + .5, a + 1.1));
+    el.style.color = flash > .05 ? cols[i] : '#fff';
+    el.style.textShadow = `0 0 ${18 * flash + 6}px ${cols[i]}`;
+  }
+  [3.35, 3.7, 4.05].forEach((a, i) => {
+    const p = eb(seg(t, a, a + .5));
+    const el = $('card' + i);
+    el.style.opacity = cl(seg(t, a, a + .2));
+    el.style.transform = `translateY(${(1 - p) * 30 + Math.sin(w * 2 + i * 1.3) * 2 * seg(t, 5, 5.6)}px) scale(${.75 + .25 * p})`;
+  });
+
+  // streams draw
+  for (const s of streams) {
+    const p = eo(seg(t, 4.2 + s.delay, 5.1 + s.delay));
+    s.p.style.strokeDashoffset = s.len * (1 - p);
+    s.p.style.opacity = s.op * (p > 0 ? 1 : 0) * (.85 + .15 * Math.sin(w * 4 + s.delay * 20));
+  }
+  { const p = eb(seg(t, 5.0, 5.4)); const a = $('arrow');
+    a.style.opacity = cl(seg(t, 5.0, 5.15)); a.style.transformOrigin = '900px 484px'; a.style.transformBox = 'view-box';
+    a.style.transform = `translateX(${(1 - p) * -30 + Math.sin(w * 6) * 2.5 * seg(t, 5.5, 6)}px) scale(${.5 + .5 * p})`; }
+  const pv = seg(t, 4.9, 5.4);
+  for (const k of parts) {
+    const u = ((t * k.sp + k.ph) % 1);
+    const pt = k.s.p.getPointAtLength(u * k.s.len);
+    k.c.setAttribute('cx', pt.x); k.c.setAttribute('cy', pt.y);
+    k.c.style.opacity = pv * Math.sin(Math.PI * u);
+  }
+
+  // right phone
+  { const p = eo(seg(t, .7, 1.45)); tf($('phoneRwrap'), p, (1 - p) * 60);
+    const g = eo(seg(t, 5.1, 5.8));
+    $('phoneRwrap').style.boxShadow = `0 0 ${20 + 34 * g}px rgba(255,80,130,${.18 + .4 * g + .06 * Math.sin(w * 3)})`;
+    $('phoneRwrap').style.filter = `saturate(${.45 + .55 * g}) brightness(${.7 + .3 * g})`;
+  }
+  // loader dots before reveal
+  [...$('loader').children].forEach((b, i) => { b.style.opacity = .25 + .75 * Math.max(0, Math.sin(t * 6 - i * .9)); });
+  $('loader').style.opacity = seg(t, 1.4, 1.8) * (1 - seg(t, 4.9, 5.2));
+  { const p = eo(seg(t, 5.15, 5.9));
+    $('vdark').style.opacity = 1 - p;
+    $('sunset').style.transform = `scale(${1.18 - .14 * p + .03 * seg(t, 5.9, 8.6)})`; }
+  [5.75, 5.9, 6.05].forEach((a, i) => { const p = eb(seg(t, a, a + .35)); tf($('s' + i), cl(seg(t, a, a + .15)), (1 - p) * 16, 0, .6 + .4 * p); });
+  [['c0', 5.8], ['c1', 5.9]].forEach(([id, a]) => { const p = eo(seg(t, a, a + .4)); $(id).style.opacity = p; $(id).style.transform = `scaleX(${p})`; $(id).style.transformOrigin = 'left'; });
+  { const p = eb(seg(t, 6.0, 6.35)); $('avatar').style.opacity = cl(seg(t, 6.0, 6.15)); $('avatar').style.transform = `scale(${p})`; }
+  const cnt = eo(seg(t, 5.8, 6.7));
+  $('likes').textContent = fmt(3200 * cnt); $('cmts').textContent = fmt(128 * cnt); $('shares').textContent = fmt(342 * cnt);
+  // heart beats
+  const hb = t => { const x = (t % 1); return x < .25 ? Math.sin(x / .25 * Math.PI) : 0; };
+  const pop = seg(t, 6.3, 6.6) > 0 && t < 6.9 ? Math.sin(seg(t, 6.3, 6.9) * Math.PI) * .45 : 0;
+  $('heart').style.transform = `scale(${1 + pop + (t > 7 ? .12 * hb(t - 7) : 0)})`;
+  $('heart').style.transformOrigin = '50% 50%';
+
+  { const p = eb(seg(t, 6.35, 6.8)); $('bubR').style.opacity = cl(seg(t, 6.35, 6.55)); $('bubR').style.transform = `scale(${.4 + .6 * p})`; }
+
+  // tagline
+  [['tg1', 6.8], ['tg2', 7.05]].forEach(([id, a]) => { const p = eo(seg(t, a, a + .55)); tf($(id), p, 0, (1 - p) * 16); });
+};
+window.T = T;
+render(parseFloat(new URLSearchParams(location.search).get('t') || '8'));
+</script>
+</body></html>
