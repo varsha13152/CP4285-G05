@@ -10,6 +10,20 @@ open-ended browsing.
 **Core rule:** the query decides *which* videos qualify; personalisation only
 re-orders them. A search never changes the user's long-term profile.
 
+<p align="center">
+  <img src="poster/qcsar-for-you-landscape-960.gif" alt="Animation: a search for 'sunset beach' returns dull results, then QCSAR's three ideas (query-conditioned, session-aware, personalised ranking) carry them into a For You style result" width="800">
+</p>
+
+<p align="center"><sub>Full-size versions: <a href="poster/qcsar-for-you-landscape.gif">GIF (1280×720)</a> · <a href="poster/qcsar-for-you-landscape.mp4">MP4 (1080p)</a> · source in <a href="poster/anim/"><code>poster/anim/</code></a></sub></p>
+
+## STePS poster
+
+Team T05's poster for the 29th STePS (11 November 2026). Click it for the full-resolution PNG.
+
+<p align="center">
+  <a href="poster/%5BT05-CP4285%5D%20STePS%20Poster.png"><img src="poster/%5BT05-CP4285%5D%20STePS%20Poster.png" alt="T05 STePS poster: QCSAR (Query-Conditioned, Session-Aware Ranking): Bringing the For You Page into Search" width="600"></a>
+</p>
+
 ## Pipeline
 
 ```
