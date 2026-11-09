@@ -160,10 +160,11 @@ python scripts/sweep_alpha.py --alphas 0.0 0.25 0.5 0.75 1.0 --w-queries 0.5 0.6
 
 ## Latest results (v3 test, α × w_query sweep, `results/alpha_sweep.json`)
 
-- **Stage 3**, gold intents, N = 100 (unchanged):
-  - hybrid: P@5 0.111, MRR 0.322;
+- **Stage 3**, gold intents, N = 100, topic weight `w_cat` 0.1 (`results/stage3_eval_v3_test_wcat01.txt`):
+  - hybrid: P@5 0.109, MRR 0.310;
   - semantic: 0.064 / 0.189;
   - category-only: 0.012 / 0.048.
+  - At the old `w_cat` 0.5, hybrid was 0.111 / 0.322 (`results/stage3_eval_v3_test.txt`). Semantic and category-only do not use `w_cat`, so they are unchanged.
 
 ### α sweep findings (44 settings: 11 α × 4 w_query)
 
